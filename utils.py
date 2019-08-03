@@ -52,7 +52,7 @@ class PoseTrackDataset(Dataset):
                 else:
                     posetrack_images.append(img)
 
-            posetrack_images = posetrack_images[:15]
+            posetrack_images = posetrack_images[:10]
 
             video_frames = []
             frame_keypoints = []

@@ -170,6 +170,7 @@ class MedPoseConvLSTM(nn.Module):
         elif self.conv1d_req:
             batch_size, num_frames, c, l = x.shape
             c_in = x.view(batch_size * num_frames, c, l)
+            c_in = c_in.to(next(self.conv1d.parameters()).get_device())
             c_out = self.conv1d(c_in)
             r_in = c_out.view(batch_size, num_frames, -1)
         else:

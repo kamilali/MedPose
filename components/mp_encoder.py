@@ -2,10 +2,6 @@ import torch.nn as nn
 import torch
 from .mp_layers import MedPoseAttention, MedPoseConvLSTM
 
-def clones(module, N):
-    "Produce N identical layers."
-    return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
-
 class MedPoseEncoder(nn.Module):
 
     def __init__(self, num_enc_layers=3, num_att_heads=4, num_lrnn_layers=3, 
@@ -105,8 +101,7 @@ class MedPoseEncoder(nn.Module):
         '''
         seq_len = feature_maps.shape[1]
 
-        if seq_len > self.lrnn_window_size:
-            feature_maps = feature_maps[:, -self.lrnn_window_size:]
+        feature_maps = feature_maps[:, -self.lrnn_window_size:]
         
         enc_in = feature_maps
         '''

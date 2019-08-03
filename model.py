@@ -9,13 +9,13 @@ import time
 
 class MedPose(nn.Module):
 
-    def __init__(self, num_keypoints=17, num_rpn_props=300, window_size=5):
+    def __init__(self, device, gpus, num_keypoints=17, num_rpn_props=300, window_size=5):
         super(MedPose, self).__init__()
         '''
         initialize the MedPose base architecture to extract
         feature maps and region proposals
         '''
-        self.base = MedPoseBase(num_keypoints=num_keypoints, num_rpn_props=num_rpn_props)
+        self.base = MedPoseBase(num_keypoints=num_keypoints, num_rpn_props=num_rpn_props).to(device)
         self.num_rpn_props = num_rpn_props
         '''
         initialize the MedPose encoder architecture with
@@ -23,7 +23,7 @@ class MedPose(nn.Module):
         using feature maps bounded by region proposals as
         queries)
         '''
-        self.encoder = nn.DataParallel(MedPoseEncoder(num_enc_layers=4, lrnn_window_size=window_size))
+        self.encoder = nn.DataParallel(MedPoseEncoder(num_enc_layers=4, lrnn_window_size=window_size), device_ids=gpus[1:]).to(gpus[1])
         self.window_size = window_size
         '''
         initialize the MedPose decoder architecture with
@@ -31,7 +31,7 @@ class MedPose(nn.Module):
         from previous pose estimations and uses encoder outputs
         as queries for subsequent pose detections)
         '''
-        self.decoder = nn.DataParallel(MedPoseDecoder(num_dec_layers=4, lrnn_window_size=window_size))
+        self.decoder = nn.DataParallel(MedPoseDecoder(num_dec_layers=4, lrnn_window_size=window_size), device_ids=gpus[1:]).to(gpus[1])
     
     def forward(self, x, pose_detections=[], initial_frame=True):
         '''
@@ -61,16 +61,17 @@ class MedPose(nn.Module):
             '''
             with torch.no_grad():
                 feature_maps, cf_region_features = self.base.extract_base_features(base_in)
-
             # visualize a single channel feature map
             #plt.imshow(feature_map[0].detach().cpu().squeeze(dim=0).numpy()[1,:,:])
             #plt.show()
             # visualize a single channel region feature map
             #plt.imshow(region_features[0].detach().cpu().squeeze(dim=0).numpy()[0,:,:])
             #plt.show()
-            print(feature_maps.shape)
-            print(cf_region_features.shape)
             enc_out = self.encoder(feature_maps, cf_region_features, initial_frame)
+            
+            del feature_maps
+            del cf_region_features
+            torch.cuda.empty_cache()
 
             # print("ENCODER OUTPUT: ", enc_out.shape)
             
@@ -84,6 +85,11 @@ class MedPose(nn.Module):
             pose_detections.append(curr_pose_estimation)
             pose_detections = pose_detections[-self.window_size:]
             initial_frame = False
+
+            del enc_out
+            del curr_pose_estimation
+            del curr_pose_classes
+            torch.cuda.empty_cache()
             #print("finished a frame")
         #print("finished videos")
         print(time.time() - start_time, "seconds")

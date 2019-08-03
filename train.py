@@ -11,7 +11,7 @@ from torch.nn.parallel._functions import Scatter, Gather
 import threading
 from torch.cuda._utils import _get_device_index
 
-DEVICES = [0, 1]
+DEVICES = [0, 1, 2, 3]
 
 def custom_scatter(inputs, target_gpus, dim=0):
 
@@ -52,15 +52,15 @@ def custom_scatter(inputs, target_gpus, dim=0):
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-train_dataloader, valid_dataloader = load_train(batch_size=2, device=device)
+train_dataloader, valid_dataloader = load_train(batch_size=6, device=device)
 
 window_size = 5
 
 # set scatter function to custom scatter function
 #model = torch.nn.DataParallel(MedPose(window_size=window_size)).to(device)
-model = MedPose(window_size=window_size).to(device)
+model = MedPose(window_size=window_size, device=device, gpus=DEVICES)
 #model_replicas = torch.nn.parallel.replicate(MedPose(window_size=window_size).to(device), DEVICES)
 
 def train():
