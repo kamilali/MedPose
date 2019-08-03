@@ -53,7 +53,7 @@ class MedPoseBase(nn.Module):
         # for fidx in features:
         #     print(features[fidx].get_device())
         # print(images.tensors.get_device(), "IMAGE TENSORS")
-        print(images.tensors.get_device(), [features[i].get_device() for i in features], "checking this")
+        #print(images.tensors.get_device(), [features[i].get_device() for i in features], "checking this")
         return self.rpn(images, features, targets)[0]
 
     def _extract_roi(self, features, images, region_props):

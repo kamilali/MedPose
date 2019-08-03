@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch
 import torchvision
 import matplotlib.pyplot as plt
+import time
 
 class MedPose(nn.Module):
 
@@ -22,7 +23,7 @@ class MedPose(nn.Module):
         using feature maps bounded by region proposals as
         queries)
         '''
-        self.encoder = MedPoseEncoder(num_enc_layers=4, lrnn_window_size=window_size)
+        self.encoder = nn.DataParallel(MedPoseEncoder(num_enc_layers=4, lrnn_window_size=window_size))
         self.window_size = window_size
         '''
         initialize the MedPose decoder architecture with
@@ -30,7 +31,7 @@ class MedPose(nn.Module):
         from previous pose estimations and uses encoder outputs
         as queries for subsequent pose detections)
         '''
-        self.decoder = MedPoseDecoder(num_dec_layers=4, lrnn_window_size=window_size)
+        self.decoder = nn.DataParallel(MedPoseDecoder(num_dec_layers=4, lrnn_window_size=window_size))
     
     def forward(self, x, pose_detections=[], initial_frame=True):
         '''
@@ -48,6 +49,7 @@ class MedPose(nn.Module):
         x = []
         pose_detections = []
         initial_frame = True
+        start_time = time.time()
         for frame_batch in frame_batches:
             x.append(frame_batch)
             x = x[-self.window_size:]
@@ -66,6 +68,8 @@ class MedPose(nn.Module):
             # visualize a single channel region feature map
             #plt.imshow(region_features[0].detach().cpu().squeeze(dim=0).numpy()[0,:,:])
             #plt.show()
+            print(feature_maps.shape)
+            print(cf_region_features.shape)
             enc_out = self.encoder(feature_maps, cf_region_features, initial_frame)
 
             # print("ENCODER OUTPUT: ", enc_out.shape)
@@ -80,6 +84,7 @@ class MedPose(nn.Module):
             pose_detections.append(curr_pose_estimation)
             pose_detections = pose_detections[-self.window_size:]
             initial_frame = False
-            print("finished a frame")
-        print("finished videos")
+            #print("finished a frame")
+        #print("finished videos")
+        print(time.time() - start_time, "seconds")
         return pose_detections
