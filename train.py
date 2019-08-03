@@ -4,10 +4,14 @@ from model import MedPose
 from utils import load_train
 import time
 
-# modify scatter function in data parallel for batch
-# processing
+# modify scatter and parallel_apply function 
+# in data parallel for batch processing
 import torch.nn.parallel.scatter_gather as scatter_gather
 from torch.nn.parallel._functions import Scatter, Gather
+import threading
+from torch.cuda._utils import _get_device_index
+from torch._utils import ExceptionWrapper
+
 DEVICES = [0, 1]
 
 def custom_scatter(inputs, target_gpus, dim=0):
@@ -48,6 +52,60 @@ def custom_scatter(inputs, target_gpus, dim=0):
 
     return res
 
+def custom_parallel_apply(modules, inputs, kwargs_tup=None, devices=None):
+
+    assert len(modules) == len(inputs)
+    if kwargs_tup is not None:
+        assert len(modules) == len(kwargs_tup)
+    else:
+        kwargs_tup = ({},) * len(modules)
+    if devices is not None:
+        assert len(modules) == len(devices)
+    else:
+        devices = [None] * len(modules)
+    devices = list(map(lambda x: _get_device_index(x, True), devices))
+    lock = threading.Lock()
+    results = {}
+    grad_enabled = torch.is_grad_enabled()
+
+    def _worker(i, module, input, kwargs, device=None):
+        torch.set_grad_enabled(grad_enabled)
+        if device is None:
+            device = next(module.parameters()).get_device()
+        try:
+            with torch.cuda.device(device):
+                # this also avoids accidental slicing of `input` if it is a Tensor
+                if not isinstance(input, (list, tuple)):
+                    input = (input,)
+                output = module(*input, **kwargs)
+            with lock:
+                results[i] = output
+        except Exception:
+            with lock:
+                results[i] = ExceptionWrapper(
+                    where="in replica {} on device {}".format(i, device))
+
+    if len(modules) > 1:
+        threads = [threading.Thread(target=_worker,
+                                    args=(i, module, input, kwargs, device))
+                   for i, (module, input, kwargs, device) in
+                   enumerate(zip(modules, inputs, kwargs_tup, devices))]
+
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    else:
+        _worker(0, modules[0], inputs[0], kwargs_tup[0], devices[0])
+
+    outputs = []
+    for i in range(len(inputs)):
+        output = results[i]
+        if isinstance(output, ExceptionWrapper):
+            output.reraise()
+        outputs.append(output)
+    return outputs
+
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -70,7 +128,7 @@ def train():
         print(len(scattered_batch_videos), len(scattered_batch_videos[0]), len(scattered_batch_videos[0][0]))
         model_replicas = model_replicas[:len(scattered_batch_videos)]
         print("applying parallelization...")
-        outs = torch.nn.parallel.parallel_apply(model_replicas, scattered_batch_videos)
+        outs = custom_parallel_apply(model_replicas, scattered_batch_videos)
         print("gathering all outputs...")
         out = torch.nn.parallel.gather(outs, DEVICES[0])
         del out
