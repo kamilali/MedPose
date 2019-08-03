@@ -37,6 +37,8 @@ class MedPoseAttention(nn.Module):
         '''
         queries = queries.view(queries.shape[0], queries.shape[1], -1)
 
+        # queries = queries.to(self.query_mappers[0].weight.get_device())
+        # context = context.to(self.key_mappers[0].weight.get_device())
         q = self.query_mappers[0](queries)
         k = self.key_mappers[0](context)
         v = self.value_mappers[0](context)
@@ -48,6 +50,8 @@ class MedPoseAttention(nn.Module):
         multi_head_att_out = torch.matmul(att_weights, v)
 
         for idx in range(1, self.num_att_heads):
+            # queries = queries.to(self.query_mappers[idx].weight.get_device())
+            # context = context.to(self.key_mappers[idx].weight.get_device())
             q = self.query_mappers[idx](queries)
             k = self.key_mappers[idx](context)
             v = self.value_mappers[idx](context)
@@ -69,19 +73,24 @@ class MedPoseConvLSTM(nn.Module):
             sequences
             '''
             self.conv2d = nn.Sequential(
-                        nn.Conv2d(input_size, input_size // 2, kernel_size=5, padding=1, stride=2),
+                        nn.Conv2d(input_size, input_size // 2, kernel_size=3, padding=1, stride=2),
                         nn.BatchNorm2d(
                             input_size // 2, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
                         nn.ReLU(),
                         nn.MaxPool2d(kernel_size=2),
-                        nn.Conv2d(input_size // 2, input_size // 4, kernel_size=5, padding=1, stride=2),
+                        nn.Conv2d(input_size // 2, input_size // 4, kernel_size=3, padding=1, stride=2),
                         nn.BatchNorm2d(
                             input_size // 4, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
                         nn.ReLU(),
                         nn.MaxPool2d(kernel_size=2),
-                        nn.Conv2d(input_size // 4, input_size // 8, kernel_size=5, padding=1, stride=2),
+                        nn.Conv2d(input_size // 4, input_size // 2, kernel_size=3, padding=1, stride=2),
                         nn.BatchNorm2d(
-                            input_size // 8, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                            input_size // 2, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                        nn.ReLU(),
+                        nn.MaxPool2d(kernel_size=2),
+                        nn.Conv2d(input_size // 2, input_size, kernel_size=3, padding=1, stride=2),
+                        nn.BatchNorm2d(
+                            input_size, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
                         nn.ReLU(),
                         nn.MaxPool2d(kernel_size=2)
                     )

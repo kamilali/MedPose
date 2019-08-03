@@ -4,7 +4,7 @@ from .mp_layers import MedPoseAttention, MedPoseConvLSTM
 
 class MedPoseEncoder(nn.Module):
 
-    def __init__(self, num_enc_layers=3, num_att_heads=2, num_lrnn_layers=3, 
+    def __init__(self, num_enc_layers=3, num_att_heads=4, num_lrnn_layers=3, 
             model_dim=256, lrnn_hidden_dim=256, ff_hidden_dim=1024, 
             roi_map_dim=7, lrnn_window_size=3):
         super(MedPoseEncoder, self).__init__()
@@ -20,6 +20,7 @@ class MedPoseEncoder(nn.Module):
         self.local_rnns = nn.ModuleList()
         self.lrnn_layer_norms = nn.ModuleList()
         self.lrnn_window_size = lrnn_window_size
+        self.hidden_rnn_hist = {}
 
         self.atts = nn.ModuleList()
         self.att_layer_norms = nn.ModuleList()
@@ -51,6 +52,12 @@ class MedPoseEncoder(nn.Module):
             lrnn_layer_norm = nn.LayerNorm(lrnn_hidden_dim, eps=1e-05, elementwise_affine=True)
             self.lrnn_layer_norms.append(lrnn_layer_norm)
             '''
+            since attention mechanism attends to all local contexts
+            for a particular frame, we store the outputs of all local
+            rnns for a given video
+            '''
+            self.hidden_rnn_hist[enc_layer] = []
+            '''
             Attention mechanism using region features to obtain queries 
             and outputs of LocalRNNs to obtain keys and values
             '''
@@ -80,7 +87,14 @@ class MedPoseEncoder(nn.Module):
             ff_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
             self.ff_layer_norms.append(ff_layer_norm)
     
-    def forward(self, feature_maps, cf_region_features):
+    def forward(self, feature_maps, cf_region_features, initial_frame=True):
+        '''
+        check if initial frame of video and clear histories if it is
+        '''
+        if initial_frame:
+            for enc_layer in range(self.num_enc_layers):
+                self.hist[enc_layer] = []
+                self.hidden_rnn_hist[enc_layer] = []
         '''
         apply LocalRNN to small local window to capture local
         structures and only keep the last hidden state representation
@@ -117,10 +131,15 @@ class MedPoseEncoder(nn.Module):
             context = context[:, context.shape[1] - 1]
             context = context.unsqueeze(dim=1)
             '''
-            attend to local structures using region features as
-            queries and output of LocalRNN as context
+            add hidden rnn output to history for attending over time
             '''
-            x = self.atts[enc_layer](cf_region_features, context)
+            self.hidden_rnn_hist[enc_layer].append(context)
+            all_context = torch.cat(self.hidden_rnn_hist[enc_layer], dim=1)
+            '''
+            attend to local structures using region features as
+            queries and outputs of LocalRNNs as context
+            '''
+            x = self.atts[enc_layer](cf_region_features, all_context)
             '''
             layer normalization + residual connection
             '''

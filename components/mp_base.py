@@ -32,6 +32,7 @@ class MedPoseBase(nn.Module):
         extracted out for our purposes
         '''
         self.rpn = keypoint_rcnn.rpn
+        self.num_rpn_props = num_rpn_props
         '''
         crop and resize feature maps in location indicated by bounding boxes
         of region proposals
@@ -42,36 +43,44 @@ class MedPoseBase(nn.Module):
                 sampling_ratio=2)
 
     def _extract_feature_maps(self, x):
-        if len(x) >= 3:
-            x = x[-3:]
         images, targets = self.fx_map_transform(x, None)
         return self.fx_map_backbone(images.tensors), images, targets
 
     def _extract_regions(self, features, images, targets):
         if isinstance(features, torch.Tensor):
             features = OrderedDict([(0, features)])
+        # print("SANITY CHECK")
+        # for fidx in features:
+        #     print(features[fidx].get_device())
+        # print(images.tensors.get_device(), "IMAGE TENSORS")
+        print(images.tensors.get_device(), [features[i].get_device() for i in features], "checking this")
         return self.rpn(images, features, targets)[0]
 
     def _extract_roi(self, features, images, region_props):
         return self.roi_pool(features, region_props, images.image_sizes)
 
     def extract_base_features(self, x):
-        feature_maps, images, targets = self._extract_feature_maps(x)
+        batch_size = len(x)
+        #print(len(x), len(x[0]), x[0][0].shape)
+        base_in = list(map(list, zip(*x)))
+        #print(len(base_in), len(base_in[0]), base_in[0][0].shape)
+        #exit()
+        frame_feature_maps = []
+        for frame_batch in base_in:
+            feature_maps, images, targets = self._extract_feature_maps(frame_batch)
+            '''
+            for now, we only operate on one scale feature maps
+            TODO: test the efficacy of different scale feature maps
+            on improving attention mechanism
+            '''
+            frame_feature_maps.append(feature_maps[0])
+        '''
+        we only care about region features from the last iteration
+        (only current frame region features used as query)
+        '''
         region_props = self._extract_regions(feature_maps, images, targets)
-        # visualize a region proposal
-        #print(len(region_props), region_props[0].shape)
-        #print("image dimensions", x[0].shape)
-        #print("one region proposal", torch.round(region_props[0][0]))
-        #fig, ax = plt.subplots(1)
-        #ax.imshow(x[0].permute(1, 2, 0).cpu().numpy())
-        #region_props_rounded = torch.round(region_props[0])
-        #x1 = region_props_rounded[0][0].item()
-        #y1 = region_props_rounded[0][1].item()
-        #x2 = region_props_rounded[0][2].item()
-        #y2 = region_props_rounded[0][3].item()
-        #print(x1, y1, x2, y2)
-        #rect = patches.Rectangle((x1, y1), (x2 - x1), (y2 - y1), linewidth=1, edgecolor='r', facecolor='none')
-        #ax.add_patch(rect)
-        #plt.show()
-        region_features = self._extract_roi(feature_maps, images, region_props)
-        return feature_maps, region_features
+        cf_region_features = self._extract_roi(feature_maps, images, region_props)
+        cf_region_features = cf_region_features.view(batch_size, self.num_rpn_props, 
+                cf_region_features.shape[1], cf_region_features.shape[2], cf_region_features.shape[3])
+        frame_feature_maps = torch.stack(frame_feature_maps, dim=1)
+        return frame_feature_maps, cf_region_features

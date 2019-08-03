@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 class MedPose(nn.Module):
 
-    def __init__(self, num_keypoints=17, num_rpn_props=300):
+    def __init__(self, num_keypoints=17, num_rpn_props=300, window_size=5):
         super(MedPose, self).__init__()
         '''
         initialize the MedPose base architecture to extract
@@ -22,47 +22,64 @@ class MedPose(nn.Module):
         using feature maps bounded by region proposals as
         queries)
         '''
-        self.encoder = MedPoseEncoder(num_enc_layers=2)
+        self.encoder = MedPoseEncoder(num_enc_layers=4, lrnn_window_size=window_size)
+        self.window_size = window_size
         '''
         initialize the MedPose decoder architecture with
         default parameters (decoder attends to local structures
         from previous pose estimations and uses encoder outputs
         as queries for subsequent pose detections)
         '''
-        self.decoder = MedPoseDecoder(num_dec_layers=2)
+        self.decoder = MedPoseDecoder(num_dec_layers=4, lrnn_window_size=window_size)
     
-    def forward(self, x, pose_detections=[]):
+    def forward(self, x, pose_detections=[], initial_frame=True):
         '''
         set to eval mode since the base cnn model takes different
         inputs based on the mode and we are not fine tuning
         '''
         self.base.eval()
         '''
-        extract feature maps and region proposals using base
-        model as well as region features using extracted feature
-        maps and region proposals for current frame
+        iterate through frames and process batch of frames in parallel
         '''
-        with torch.no_grad():
-            feature_maps, region_features = self.base.extract_base_features(x)
-        feature_maps = feature_maps[0]
-        # visualize a single channel feature map
-        #plt.imshow(feature_maps[0].detach().cpu().squeeze(dim=0).numpy()[1,:,:])
-        #plt.show()
-        # visualize a single channel region feature map
-        #plt.imshow(region_features[0].detach().cpu().squeeze(dim=0).numpy()[0,:,:])
-        #plt.show()
-        
-        cf_region_features = region_features[-self.num_rpn_props:]
+        #print(len(x), len(x[0]), x[0][0].shape, "MODEL IN")
+        frame_batches = list(map(list, zip(*x)))
+        #print(len(frame_batches), len(frame_batches[0]), frame_batches[0][0].shape, "MODEL IN FLIPPED")
+        #exit()
+        x = []
+        pose_detections = []
+        initial_frame = True
+        for frame_batch in frame_batches:
+            x.append(frame_batch)
+            x = x[-self.window_size:]
+            base_in = list(map(list, zip(*x)))
+            '''
+            extract feature maps and region proposals using base
+            model as well as region features using extracted feature
+            maps and region proposals for current frame
+            '''
+            with torch.no_grad():
+                feature_maps, cf_region_features = self.base.extract_base_features(base_in)
 
-        enc_out = self.encoder(feature_maps.unsqueeze(dim=0), cf_region_features.unsqueeze(dim=0))
+            # visualize a single channel feature map
+            #plt.imshow(feature_map[0].detach().cpu().squeeze(dim=0).numpy()[1,:,:])
+            #plt.show()
+            # visualize a single channel region feature map
+            #plt.imshow(region_features[0].detach().cpu().squeeze(dim=0).numpy()[0,:,:])
+            #plt.show()
+            enc_out = self.encoder(feature_maps, cf_region_features, initial_frame)
 
-        print("ENCODER OUTPUT: ", enc_out.shape)
-        
-        if len(pose_detections) == 0:
-            curr_pose_estimation, curr_pose_classes = self.decoder(enc_out)
-        else:
-            curr_pose_estimation, curr_pose_classes = self.decoder(enc_out, 
-                    torch.stack(pose_detections, dim=1))
-        print("DECODER OUTPUTS: ", curr_pose_estimation.shape, curr_pose_classes.shape)
-
-        return curr_pose_estimation
+            # print("ENCODER OUTPUT: ", enc_out.shape)
+            
+            if len(pose_detections) == 0:
+                curr_pose_estimation, curr_pose_classes = self.decoder(enc_out, None, initial_frame)
+            else:
+                curr_pose_estimation, curr_pose_classes = self.decoder(enc_out, 
+                        torch.stack(pose_detections, dim=1), initial_frame)
+            # print("DECODER OUTPUTS: ", curr_pose_estimation.shape, curr_pose_classes.shape)
+            
+            pose_detections.append(curr_pose_estimation)
+            pose_detections = pose_detections[-self.window_size:]
+            initial_frame = False
+            print("finished a frame")
+        print("finished videos")
+        return pose_detections

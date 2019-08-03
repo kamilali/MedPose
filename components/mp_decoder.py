@@ -4,7 +4,7 @@ from .mp_layers import MedPoseAttention, MedPoseConvLSTM
 
 class MedPoseDecoder(nn.Module):
 
-    def __init__(self, num_dec_layers=3, num_att_heads=2, num_lrnn_layers=3,
+    def __init__(self, num_dec_layers=3, num_att_heads=4, num_lrnn_layers=3,
             model_dim=256, lrnn_hidden_dim=256, ff_hidden_dim=1024,
             roi_map_dim=7, lrnn_window_size=3, num_keypoints=17):
         super(MedPoseDecoder, self).__init__()
@@ -20,6 +20,7 @@ class MedPoseDecoder(nn.Module):
         self.local_rnns = nn.ModuleList()
         self.lrnn_layer_norms = nn.ModuleList()
         self.lrnn_window_size = lrnn_window_size
+        self.hidden_rnn_hist = {}
 
         self.self_atts = nn.ModuleList()
         self.self_att_layer_norms = nn.ModuleList()
@@ -51,6 +52,12 @@ class MedPoseDecoder(nn.Module):
 
             lrnn_layer_norm = nn.LayerNorm(lrnn_hidden_dim, eps=1e-05, elementwise_affine=True)
             self.lrnn_layer_norms.append(lrnn_layer_norm)
+            '''
+            since attention mechanism attends to all local contexts
+            for a particular frame, we store the outputs of all local
+            rnns for a given video
+            '''
+            self.hidden_rnn_hist[dec_layer] = []
             '''
             Attention mechanism (self-attention) on outputs of
             LocalRNN to find local structures to attend to from
@@ -116,7 +123,14 @@ class MedPoseDecoder(nn.Module):
                     nn.Linear(64, num_keypoints * 2)
                 )
     
-    def forward(self, enc_out, poses=None):
+    def forward(self, enc_out, poses=None, initial_frame=True):
+        '''
+        check if initial frame of video and clear histories if it is
+        '''
+        if initial_frame:
+            for dec_layer in range(self.num_dec_layers):
+                self.hist[dec_layer] = []
+                self.hidden_rnn_hist[dec_layer] = []
         '''
         stack decoders based on number of decoder layers specified
         '''
@@ -163,10 +177,15 @@ class MedPoseDecoder(nn.Module):
                 context = context[:, context.shape[1] - 1]
                 context = context.unsqueeze(dim=1)
                 '''
+                add hidden rnn output to history for attending over time
+                '''
+                self.hidden_rnn_hist[dec_layer].append(context)
+                all_context = torch.cat(self.hidden_rnn_hist[dec_layer], dim=1)
+                '''
                 attend to local structures using hidden representation
                 as query and context for self attention
                 '''
-                sa_out = self.self_atts[dec_layer](context, context)
+                sa_out = self.self_atts[dec_layer](context, all_context)
                 '''
                 layer normalization + residual connection
                 '''
