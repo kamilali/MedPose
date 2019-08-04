@@ -102,7 +102,7 @@ def collate_fn(data):
     batch_videos = [row[0] for row in data]
     #batch_videos = torch.stack(batch_videos, dim=0)
     batch_videos_keypoints = [row[1] for row in data]
-
+    batch_videos_keypoints = list(map(list, zip(*batch_videos_keypoints)))
     return batch_videos, batch_videos_keypoints
 
 def load_train(batch_size=1, num_workers=0, device="cpu"):

@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch
 import torchvision
 import matplotlib.pyplot as plt
-import time
 
 class MedPose(nn.Module):
 
@@ -42,14 +41,12 @@ class MedPose(nn.Module):
         '''
         iterate through frames and process batch of frames in parallel
         '''
-        #print(len(x), len(x[0]), x[0][0].shape, "MODEL IN")
         frame_batches = list(map(list, zip(*x)))
-        #print(len(frame_batches), len(frame_batches[0]), frame_batches[0][0].shape, "MODEL IN FLIPPED")
-        #exit()
         x = []
         pose_detections = []
+        pose_classifications = []
         initial_frame = True
-        start_time = time.time()
+
         for frame_batch in frame_batches:
             x.append(frame_batch)
             x = x[-self.window_size:]
@@ -61,36 +58,28 @@ class MedPose(nn.Module):
             '''
             with torch.no_grad():
                 feature_maps, cf_region_features = self.base.extract_base_features(base_in)
-            # visualize a single channel feature map
-            #plt.imshow(feature_map[0].detach().cpu().squeeze(dim=0).numpy()[1,:,:])
-            #plt.show()
-            # visualize a single channel region feature map
-            #plt.imshow(region_features[0].detach().cpu().squeeze(dim=0).numpy()[0,:,:])
-            #plt.show()
+
             enc_out = self.encoder(feature_maps, cf_region_features, initial_frame)
             
             del feature_maps
             del cf_region_features
             torch.cuda.empty_cache()
-
-            # print("ENCODER OUTPUT: ", enc_out.shape)
             
             if len(pose_detections) == 0:
                 curr_pose_estimation, curr_pose_classes = self.decoder(enc_out, None, initial_frame)
             else:
                 curr_pose_estimation, curr_pose_classes = self.decoder(enc_out, 
                         torch.stack(pose_detections, dim=1), initial_frame)
-            # print("DECODER OUTPUTS: ", curr_pose_estimation.shape, curr_pose_classes.shape)
             
             pose_detections.append(curr_pose_estimation)
             pose_detections = pose_detections[-self.window_size:]
+            pose_classifications.append(curr_pose_classes)
+            pose_classifications = pose_classifications[-self.window_size:]
             initial_frame = False
 
             del enc_out
             del curr_pose_estimation
             del curr_pose_classes
             torch.cuda.empty_cache()
-            #print("finished a frame")
-        #print("finished videos")
-        print(time.time() - start_time, "seconds")
-        return pose_detections
+
+        return pose_detections, pose_classifications
