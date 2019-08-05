@@ -16,11 +16,13 @@ class MedPoseEncoder(nn.Module):
         '''
         self.num_enc_layers = num_enc_layers
         self.hist = {}
+        self.hist_device = {}
 
         self.local_rnns = nn.ModuleList()
         self.lrnn_layer_norms = nn.ModuleList()
         self.lrnn_window_size = lrnn_window_size
         self.hidden_rnn_hist = {}
+        self.hr_hist_device = {}
 
         self.atts = nn.ModuleList()
         self.att_layer_norms = nn.ModuleList()
@@ -132,7 +134,9 @@ class MedPoseEncoder(nn.Module):
             '''
             add hidden rnn output to history for attending over time
             '''
-            self.hidden_rnn_hist[enc_layer].append(context)
+            if len(self.hidden_rnn_hist[enc_layer]) == 0:
+                self.hr_hist_device[enc_layer] = context.get_device()
+            self.hidden_rnn_hist[enc_layer].append(context.to(self.hr_hist_device[enc_layer]))
             all_context = torch.cat(self.hidden_rnn_hist[enc_layer], dim=1)
             '''
             attend to local structures using region features as
@@ -159,9 +163,11 @@ class MedPoseEncoder(nn.Module):
             next layer)
             '''
             if enc_layer < (self.num_enc_layers - 1):
+                if len(self.hist[enc_layer + 1]) == 0:
+                    self.hist_device[enc_layer + 1] = enc_out.get_device()
                 if len(self.hist[enc_layer + 1]) == self.lrnn_window_size:
                     self.hist[enc_layer + 1] = self.hist[enc_layer + 1][1:]
-                self.hist[enc_layer + 1].append(enc_out)
+                self.hist[enc_layer + 1].append(enc_out.to(self.hist_device[enc_layer + 1]))
 
         return enc_out
 

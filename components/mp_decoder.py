@@ -16,11 +16,13 @@ class MedPoseDecoder(nn.Module):
         '''
         self.num_dec_layers = num_dec_layers
         self.hist = {}
+        self.hist_device = {}
 
         self.local_rnns = nn.ModuleList()
         self.lrnn_layer_norms = nn.ModuleList()
         self.lrnn_window_size = lrnn_window_size
         self.hidden_rnn_hist = {}
+        self.hr_hist_device = {}
 
         self.self_atts = nn.ModuleList()
         self.self_att_layer_norms = nn.ModuleList()
@@ -114,7 +116,7 @@ class MedPoseDecoder(nn.Module):
                     nn.Linear(64, 32),
                     nn.ReLU(),
                     nn.Dropout(0.1),
-                    nn.Linear(32, 1)
+                    nn.Linear(32, 2)
                 )
         self.pose_regress = nn.Sequential(
                     nn.Linear(model_dim, 64),
@@ -179,7 +181,9 @@ class MedPoseDecoder(nn.Module):
                 '''
                 add hidden rnn output to history for attending over time
                 '''
-                self.hidden_rnn_hist[dec_layer].append(context)
+                if len(self.hidden_rnn_hist[dec_layer]) == 0:
+                    self.hr_hist_device[dec_layer] = context.get_device()
+                self.hidden_rnn_hist[dec_layer].append(context.to(self.hr_hist_device[dec_layer]))
                 all_context = torch.cat(self.hidden_rnn_hist[dec_layer], dim=1)
                 '''
                 attend to local structures using hidden representation
@@ -216,9 +220,11 @@ class MedPoseDecoder(nn.Module):
             next layer)
             '''
             if dec_layer < (self.num_dec_layers - 1):
+                if len(self.hist[dec_layer + 1]) == 0:
+                    self.hist_device[dec_layer + 1] = dec_out.get_device()
                 if len(self.hist[dec_layer + 1]) == self.lrnn_window_size:
                     self.hist[dec_layer + 1] = self.hist[dec_layer + 1][1:]
-                self.hist[dec_layer + 1].append(dec_out)
+                self.hist[dec_layer + 1].append(dec_out.to(self.hist_device[dec_layer + 1]))
         '''
         pass output of last decoder layer to fully connected network for
         pose estimation
