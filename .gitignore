@@ -1,3 +1,5 @@
 data/
 model_repository/
 __pycache__/
+*.out
+*.sbatch

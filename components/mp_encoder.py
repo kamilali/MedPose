@@ -58,7 +58,7 @@ class MedPoseEncoder(nn.Module):
             for a particular frame, we store the outputs of all local
             rnns for a given video
             '''
-            self.hidden_rnn_hist[enc_layer] = []
+            self.hidden_rnn_hist[enc_layer] = None
             '''
             Attention mechanism using region features to obtain queries 
             and outputs of LocalRNNs to obtain keys and values
@@ -96,7 +96,9 @@ class MedPoseEncoder(nn.Module):
         if initial_frame:
             for enc_layer in range(self.num_enc_layers):
                 self.hist[enc_layer] = []
-                self.hidden_rnn_hist[enc_layer] = []
+                self.hidden_rnn_hist[enc_layer] = None
+                self.hist_device[enc_layer] = None
+                self.hr_hist_device[enc_layer] = None
         '''
         apply LocalRNN to small local window to capture local
         structures and only keep the last hidden state representation
@@ -134,10 +136,13 @@ class MedPoseEncoder(nn.Module):
             '''
             add hidden rnn output to history for attending over time
             '''
-            if len(self.hidden_rnn_hist[enc_layer]) == 0:
+            if self.hr_hist_device[enc_layer] is None:
                 self.hr_hist_device[enc_layer] = context.get_device()
-            self.hidden_rnn_hist[enc_layer].append(context.to(self.hr_hist_device[enc_layer]))
-            all_context = torch.cat(self.hidden_rnn_hist[enc_layer], dim=1)
+                self.hidden_rnn_hist[enc_layer] = context
+            else:
+                #context = context.to(self.hr_hist_device[enc_layer])
+                self.hidden_rnn_hist[enc_layer] = torch.cat((self.hidden_rnn_hist[enc_layer], context.to(self.hr_hist_device[enc_layer])), dim=1)
+            all_context = self.hidden_rnn_hist[enc_layer]
             '''
             attend to local structures using region features as
             queries and outputs of LocalRNNs as context
@@ -163,7 +168,7 @@ class MedPoseEncoder(nn.Module):
             next layer)
             '''
             if enc_layer < (self.num_enc_layers - 1):
-                if len(self.hist[enc_layer + 1]) == 0:
+                if self.hist_device[enc_layer + 1] is None:
                     self.hist_device[enc_layer + 1] = enc_out.get_device()
                 if len(self.hist[enc_layer + 1]) == self.lrnn_window_size:
                     self.hist[enc_layer + 1] = self.hist[enc_layer + 1][1:]

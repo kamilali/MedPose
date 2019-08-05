@@ -6,28 +6,30 @@ import argparse
 import os
 import time
 
-DEVICES = [0, 1, 2]
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-window_size = 5
-batch_size = len(DEVICES) - 1
-num_keypoints = 17
-
-train_dataloader, valid_dataloader = load_train(batch_size=batch_size, device=device)
-model = MedPose(window_size=window_size, num_keypoints=num_keypoints, device=device, gpus=DEVICES)
-
-optimized_params = list(model.encoder.parameters()) + list(model.decoder.parameters())
-optimizer = torch.optim.Adam(optimized_params, lr=0.01)
-estimation_criterion = torch.nn.MSELoss()
-classification_criterion = torch.nn.CrossEntropyLoss()
 
 def train(args):
+
+    DEVICES = [i for i in range(int(args.gpus))]
+
+    window_size = 5
+    batch_size = len(DEVICES) - 1
+    num_keypoints = 17
+
+    train_dataloader, valid_dataloader = load_train(batch_size=batch_size, device=device)
+    model = MedPose(window_size=window_size, num_keypoints=num_keypoints, device=device, gpus=DEVICES)
+
+    optimized_params = list(model.encoder.parameters()) + list(model.decoder.parameters())
+    optimizer = torch.optim.Adam(optimized_params, lr=0.01)
+    estimation_criterion = torch.nn.MSELoss()
+    classification_criterion = torch.nn.CrossEntropyLoss()
+
     print("[III] Training MedPose...")
     print("Number of trainable model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad))
-    for epoch in range(args.epochs + 1):
+    for epoch in range(int(args.epochs) + 1):
         start_time = time.time()
         for train_idx, (batch_videos, batch_keypoints) in enumerate(train_dataloader):
             estimations, classifications = model(batch_videos)
@@ -66,7 +68,7 @@ def train(args):
             del estimation_total_loss
             del classification_total_loss
         print("Time to complete epoch: {} seconds".format(time.time() - start_time))
-        if epoch != 0 and epoch > 50 and epoch % 10 == 0:
+        if epoch != 0:
             torch.save(model.state_dict(), "model_repository/model-{}.pth".format(epoch))
 
 def generate_labels(pred_tensor, gt_tensor, pred_min_bounds, pred_max_bounds, gt_min_bounds, gt_max_bounds):
@@ -119,6 +121,7 @@ def find_bounds_from_keypoints(keypoints):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", default=1)
+    parser.add_argument("--gpus", default=2)
     args = parser.parse_args()
     # check if model repository exists otherwise create it
     if not os.path.exists("model_repository"):
