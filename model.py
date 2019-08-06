@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 class MedPose(nn.Module):
 
-    def __init__(self, device, gpus, num_keypoints=17, num_rpn_props=300, window_size=5):
+    def __init__(self, device, gpus, num_keypoints=17, num_rpn_props=300, window_size=5, stack_layers=4):
         super(MedPose, self).__init__()
         '''
         initialize the MedPose base architecture to extract
@@ -22,7 +22,7 @@ class MedPose(nn.Module):
         using feature maps bounded by region proposals as
         queries)
         '''
-        self.encoder = nn.DataParallel(MedPoseEncoder(num_enc_layers=4, lrnn_window_size=window_size), device_ids=gpus[1:]).to(gpus[1])
+        self.encoder = MedPoseEncoder(num_enc_layers=stack_layers, lrnn_window_size=window_size, gpus=gpus[1:], device=device).to(gpus[1])
         self.window_size = window_size
         '''
         initialize the MedPose decoder architecture with
@@ -30,7 +30,7 @@ class MedPose(nn.Module):
         from previous pose estimations and uses encoder outputs
         as queries for subsequent pose detections)
         '''
-        self.decoder = nn.DataParallel(MedPoseDecoder(num_dec_layers=4, lrnn_window_size=window_size), device_ids=gpus[1:]).to(gpus[1])
+        self.decoder = MedPoseDecoder(num_dec_layers=stack_layers, lrnn_window_size=window_size, gpus=gpus[1:], device=device).to(gpus[1])
     
     def forward(self, x, pose_detections=[], initial_frame=True):
         '''
@@ -48,6 +48,7 @@ class MedPose(nn.Module):
         initial_frame = True
 
         for frame_batch in frame_batches:
+            #print("Processing frame; initial frame status:", initial_frame)
             x.append(frame_batch)
             x = x[-self.window_size:]
             base_in = list(map(list, zip(*x)))
@@ -58,9 +59,8 @@ class MedPose(nn.Module):
             '''
             with torch.no_grad():
                 feature_maps, cf_region_features = self.base.extract_base_features(base_in)
-
-            enc_out = self.encoder(feature_maps, cf_region_features, initial_frame)
             
+            enc_out = self.encoder(feature_maps, cf_region_features, initial_frame)
             del feature_maps
             del cf_region_features
             torch.cuda.empty_cache()

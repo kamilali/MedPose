@@ -16,11 +16,12 @@ def train(args):
     DEVICES = [i for i in range(int(args.gpus))]
 
     window_size = 5
-    batch_size = len(DEVICES) - 1
+    per_gpu_batch_size = 1
+    batch_size = per_gpu_batch_size * (len(DEVICES) - 1)
     num_keypoints = 17
 
     train_dataloader, valid_dataloader = load_train(batch_size=batch_size, device=device)
-    model = MedPose(window_size=window_size, num_keypoints=num_keypoints, device=device, gpus=DEVICES)
+    model = MedPose(window_size=window_size, num_keypoints=num_keypoints, num_rpn_props=300, stack_layers=4, device=device, gpus=DEVICES)
 
     optimized_params = list(model.encoder.parameters()) + list(model.decoder.parameters())
     optimizer = torch.optim.Adam(optimized_params, lr=0.01)
@@ -32,11 +33,14 @@ def train(args):
     for epoch in range(int(args.epochs) + 1):
         start_time = time.time()
         for train_idx, (batch_videos, batch_keypoints) in enumerate(train_dataloader):
+            #module_start_time = time.time()
             estimations, classifications = model(batch_videos)
+            #print("model forward pass:", time.time() - module_start_time, "seconds")
+            #module_start_time = time.time()
             estimation_total_loss = 0
             classification_total_loss = 0
             for seq_idx in range(len(estimations)):
-                for batch_idx in range(batch_size):
+                for batch_idx in range(estimations[seq_idx].shape[0]):
                     pose_estimations = estimations[seq_idx][batch_idx].to(device)
                     pose_estimations = pose_estimations.view(
                             pose_estimations.shape[0], 2, num_keypoints).permute(0, 2, 1)
@@ -56,6 +60,7 @@ def train(args):
                     del keypoints
                     del keypoint_labels
                     del classification_labels
+            #print("labels + loss computation:", time.time() - module_start_time, "seconds")
             # backpropogate gradients from loss functions and update weights
             optimizer.zero_grad()
             total_loss = estimation_total_loss + classification_total_loss

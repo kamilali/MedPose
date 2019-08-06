@@ -36,7 +36,7 @@ class MedPoseAttention(nn.Module):
         map inputs to query, key, and value vectors
         '''
         queries = queries.view(queries.shape[0], queries.shape[1], -1)
-
+        
         queries = queries.to(self.query_mappers[0].weight.get_device())
         context = context.to(self.key_mappers[0].weight.get_device())
         q = self.query_mappers[0](queries)
@@ -48,6 +48,7 @@ class MedPoseAttention(nn.Module):
         '''
         att_weights = self.softmax(torch.div(torch.matmul(q, torch.transpose(k, 1, 2)), sqrt(self.model_dim)))
         multi_head_att_out = torch.matmul(att_weights, v)
+        residual_connection = q
 
         for idx in range(1, self.num_att_heads):
             queries = queries.to(self.query_mappers[idx].weight.get_device())
@@ -58,9 +59,10 @@ class MedPoseAttention(nn.Module):
 
             att_weights = self.softmax(
                     torch.div(torch.matmul(q, torch.transpose(k, 1, 2)), sqrt(self.model_dim)))
-            multi_head_att_out  = torch.cat([multi_head_att_out, torch.matmul(att_weights, v)], dim=2)
+            multi_head_att_out = torch.cat([multi_head_att_out, torch.matmul(att_weights, v)], dim=2)
+            residual_connection = torch.cat([residual_connection, q], dim=2)
         
-        return self.multi_head_att_mapper(multi_head_att_out)
+        return self.multi_head_att_mapper(multi_head_att_out), residual_connection
 
 class MedPoseConvLSTM(nn.Module):
     
