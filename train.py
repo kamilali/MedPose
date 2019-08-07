@@ -11,6 +11,16 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
+def load_checkpoint(model, optimizer):
+    start_epoch = 0
+    if os.path.isfile("training-checkpoint.pth"):
+        print("[*] Loading checkpoint...")
+        checkpoint = torch.load("training-checkpoint.pth")
+        start_epoch = checkpoint['epoch']
+        model.load_state_dict(checkpoint['state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+    return model, optimizer, start_epoch
+
 def train(args):
 
     DEVICES = [i for i in range(int(args.gpus))]
@@ -25,12 +35,16 @@ def train(args):
 
     optimized_params = list(model.encoder.parameters()) + list(model.decoder.parameters())
     optimizer = torch.optim.Adam(optimized_params, lr=0.01)
+    
+    # load checkpoint if exists
+    model, optimizer, start_epoch = load_checkpoint(model, optimizer)
+
     estimation_criterion = torch.nn.MSELoss()
     classification_criterion = torch.nn.CrossEntropyLoss()
 
     print("[III] Training MedPose...")
     print("Number of trainable model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad))
-    for epoch in range(int(args.epochs) + 1):
+    for epoch in range(start_epoch, int(args.epochs) + 1):
         start_time = time.time()
         for train_idx, (batch_videos, batch_keypoints) in enumerate(train_dataloader):
             #module_start_time = time.time()
@@ -73,6 +87,17 @@ def train(args):
             del estimation_total_loss
             del classification_total_loss
         print("Time to complete epoch: {} seconds".format(time.time() - start_time))
+        # save state every epoch in case of preemption
+        state = {
+                    'epoch': epoch + 1,
+                    'state_dict': model.state_dict(),
+                    'optimizer': optimizer.state_dict()
+                }
+         if os.path.isfile("training-checkpoint.pth"):
+             torch.save(state, "training-checkpoint-1.pth")
+             os.rename("training-checkpoint-1.pth", "training-checkpoint.pth")
+         else:
+             torch.save(state, "training-checkpoint.pth")
         if epoch != 0:
             torch.save(model.state_dict(), "model_repository/model-{}.pth".format(epoch))
 
