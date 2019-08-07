@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 from .mp_layers import MedPoseAttention, MedPoseConvLSTM
+import time
 
 class MedPoseEncoder(nn.Module):
 
@@ -56,10 +57,10 @@ class MedPoseEncoder(nn.Module):
                     batch_first=True,
                     conv2d_req=(enc_layer == 0),
                     conv1d_req=(enc_layer != 0))
-            self.local_rnns.append(local_rnn)
+            self.local_rnns.append(nn.DataParallel(local_rnn, device_ids=self.gpus))
 
             lrnn_layer_norm = nn.LayerNorm(lrnn_hidden_dim, eps=1e-05, elementwise_affine=True)
-            self.lrnn_layer_norms.append(lrnn_layer_norm)
+            self.lrnn_layer_norms.append(nn.DataParallel(lrnn_layer_norm, device_ids=self.gpus))
             '''
             since attention mechanism attends to all local contexts
             for a particular frame, we store the outputs of all local
@@ -78,10 +79,10 @@ class MedPoseEncoder(nn.Module):
                     value_dim=lrnn_hidden_dim, 
                     model_dim=model_dim,
                     num_att_heads=num_att_heads)
-            self.atts.append(att)
+            self.atts.append(nn.DataParallel(att, device_ids=self.gpus))
 
             att_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
-            self.att_layer_norms.append(att_layer_norm)
+            self.att_layer_norms.append(nn.DataParallel(att_layer_norm, device_ids=self.gpus))
             '''
             feed-forward module to map output of attention layer to final
             encoder output (the above sub-layers can be stacked through
@@ -96,7 +97,7 @@ class MedPoseEncoder(nn.Module):
             self.ffs.append(ff)
 
             ff_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
-            self.ff_layer_norms.append(ff_layer_norm)
+            self.ff_layer_norms.append(nn.DataParallel(ff_layer_norm, device_ids=self.gpus))
     
     def forward(self, feature_maps, cf_region_features, initial_frame=True):
         '''
@@ -130,8 +131,8 @@ class MedPoseEncoder(nn.Module):
             if enc_layer != 0:
                 enc_in = torch.stack(self.hist[enc_layer], dim=1)
                 enc_in = enc_in.permute(0, 1, 3, 2)
-            #(context, _), residual_connection = self.local_rnns[enc_layer](enc_in)
-            (context, _), residual_connection = data_parallel(self.local_rnns[enc_layer], enc_in, self.gpus, self.device)
+            (context, _), residual_connection = self.local_rnns[enc_layer](enc_in)
+            #(context, _), residual_connection = data_parallel(self.local_rnns[enc_layer], enc_in, self.gpus, self.device)
             if enc_layer == 0:
                 del feature_maps
             else:
@@ -141,8 +142,8 @@ class MedPoseEncoder(nn.Module):
             layer normalization + residual connection (comes from output
             of conv layers prior to forward pass through lstm)
             '''
-            #context = self.lrnn_layer_norms[enc_layer](context + residual_connection)
-            context = data_parallel(self.lrnn_layer_norms[enc_layer], context + residual_connection, self.gpus, self.device)
+            context = self.lrnn_layer_norms[enc_layer](context + residual_connection)
+            #context = data_parallel(self.lrnn_layer_norms[enc_layer], context + residual_connection, self.gpus, self.device)
             '''
             use the last hidden layer as the hidden representation
             '''
@@ -168,22 +169,23 @@ class MedPoseEncoder(nn.Module):
             queries and outputs of LocalRNNs as context
             '''
             x, residual_connection = self.atts[enc_layer](query, context)
+            #x, residual_connection = data_parallel(self.atts[enc_layer], (query, context), self.gpus, self.device)
             '''
             layer normalization + residual connection
             '''
-            #x = self.att_layer_norms[enc_layer](x + residual_connection)
-            x = data_parallel(self.att_layer_norms[enc_layer], x + residual_connection, self.gpus, self.device)
+            x = self.att_layer_norms[enc_layer](x + residual_connection)
+            #x = data_parallel(self.att_layer_norms[enc_layer], x + residual_connection, self.gpus, self.device)
             '''
             transform features non-linearly through feed forward
             module
             '''
-            #enc_out = self.ffs[enc_layer](x)
-            enc_out = data_parallel(self.ffs[enc_layer], x, self.gpus, self.device)
+            enc_out = self.ffs[enc_layer](x)
+            #enc_out = data_parallel(self.ffs[enc_layer], x, self.gpus, self.device)
             '''
             layer normalization + residual connection
             '''
-            #enc_out = self.ff_layer_norms[enc_layer](enc_out + x)
-            enc_out = data_parallel(self.ff_layer_norms[enc_layer], enc_out + x, self.gpus, self.device)
+            enc_out = self.ff_layer_norms[enc_layer](enc_out + x)
+            #enc_out = data_parallel(self.ff_layer_norms[enc_layer], enc_out + x, self.gpus, self.device)
             '''
             store current output in encoder history for next layer and, 
             if the next layer history is full, shift history to
@@ -198,21 +200,3 @@ class MedPoseEncoder(nn.Module):
                 self.hist[enc_layer + 1].append(enc_out.to(self.hist_device[enc_layer + 1]))
 
         return enc_out
-
-def data_parallel(module, x, gpus=None, device=None):
-    
-    if not gpus:
-        if type(x) == list:
-            return module(*x)
-        else:
-            return module(x)
-
-    if device is None:
-        device = gpus[0]
-
-    replicas = nn.parallel.replicate(module, gpus)
-    inputs = nn.parallel.scatter(x, gpus)
-    replicas = replicas[:len(inputs)]
-    outputs = nn.parallel.parallel_apply(replicas, inputs)
-    return nn.parallel.gather(outputs, device)
-

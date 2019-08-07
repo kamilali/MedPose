@@ -60,7 +60,7 @@ class MedPoseDecoder(nn.Module):
             self.local_rnns.append(local_rnn)
 
             lrnn_layer_norm = nn.LayerNorm(lrnn_hidden_dim, eps=1e-05, elementwise_affine=True)
-            self.lrnn_layer_norms.append(lrnn_layer_norm)
+            self.lrnn_layer_norms.append(nn.DataParallel(lrnn_layer_norm, device_ids=self.gpus))
             '''
             since attention mechanism attends to all local contexts
             for a particular frame, we store the outputs of all local
@@ -78,10 +78,10 @@ class MedPoseDecoder(nn.Module):
                     value_dim=lrnn_hidden_dim, 
                     model_dim=model_dim,
                     num_att_heads=num_att_heads)
-            self.self_atts.append(self_att)
+            self.self_atts.append(nn.DataParallel(self_att, device_ids=self.gpus))
 
             self_att_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
-            self.self_att_layer_norms.append(self_att_layer_norm)
+            self.self_att_layer_norms.append(nn.DataParallel(self_att_layer_norm, device_ids=self.gpus))
             '''
             Attention mechanism using output of encoder as context
             and using output of prior attention layer as queries
@@ -92,10 +92,10 @@ class MedPoseDecoder(nn.Module):
                     value_dim=lrnn_hidden_dim, 
                     model_dim=model_dim,
                     num_att_heads=num_att_heads)
-            self.enc_dec_atts.append(enc_dec_att)
+            self.enc_dec_atts.append(nn.DataParallel(enc_dec_att, device_ids=self.gpus))
 
             enc_dec_att_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
-            self.enc_dec_att_layer_norms.append(enc_dec_att_layer_norm)
+            self.enc_dec_att_layer_norms.append(nn.DataParallel(enc_dec_att_layer_norm, device_ids=self.gpus))
             '''
             feed-forward module to map output of attention layer to final
             decoder output (the above sub-layers can be stacked through
@@ -110,7 +110,7 @@ class MedPoseDecoder(nn.Module):
             self.ffs.append(ff)
 
             ff_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
-            self.ff_layer_norms.append(ff_layer_norm)
+            self.ff_layer_norms.append(nn.DataParallel(ff_layer_norm, device_ids=self.gpus))
         '''
         fully connected networks for classification (pose detectable
         or not) and regression (regressing from final decoder output
@@ -154,39 +154,40 @@ class MedPoseDecoder(nn.Module):
                 require prior pose estimations)
                 '''
                 eda_out, residual_connection = self.enc_dec_atts[dec_layer](enc_out, enc_out)
+                #eda_out, residual_connection = data_parallel(self.enc_dec_atts[dec_layer], (enc_out, enc_out), self.gpus, self.device)
                 '''
                 layer normalization +  residual connection
                 '''
-                #eda_out = self.enc_dec_att_layer_norms[dec_layer](eda_out + residual_connection)
-                eda_out = data_parallel(self.enc_dec_att_layer_norms[dec_layer], eda_out + residual_connection, self.gpus, self.device)
+                eda_out = self.enc_dec_att_layer_norms[dec_layer](eda_out + residual_connection)
+                #eda_out = data_parallel(self.enc_dec_att_layer_norms[dec_layer], eda_out + residual_connection, self.gpus, self.device)
                 '''
                 transform features non-linearly through feed forward
                 module
                 '''
-                #dec_out = self.ffs[dec_layer](eda_out)
-                dec_out = data_parallel(self.ffs[dec_layer], eda_out, self.gpus, self.device)
+                dec_out = self.ffs[dec_layer](eda_out)
+                #dec_out = data_parallel(self.ffs[dec_layer], eda_out, self.gpus, self.device)
                 '''
                 layer normalization + residual connection
                 '''
-                #dec_out = self.ff_layer_norms[dec_layer](dec_out + eda_out)
-                dec_out = data_parallel(self.ff_layer_norms[dec_layer], dec_out + eda_out, self.gpus, self.device)
+                dec_out = self.ff_layer_norms[dec_layer](dec_out + eda_out)
+                #dec_out = data_parallel(self.ff_layer_norms[dec_layer], dec_out + eda_out, self.gpus, self.device)
             else:
                 if dec_layer == 0:
                     poses = poses[:, -self.lrnn_window_size:]
                     poses = poses.permute(0, 1, 3, 2)
-                    #(context, _), residual_connection = self.local_rnns[dec_layer](poses)
-                    (context, _), residual_connection = data_parallel(self.local_rnns[dec_layer], poses, self.gpus, self.device)
+                    (context, _), residual_connection = self.local_rnns[dec_layer](poses)
+                    #(context, _), residual_connection = data_parallel(self.local_rnns[dec_layer], poses, self.gpus, self.device)
                 else:
                     dec_in = torch.stack(self.hist[dec_layer], dim=1)
                     dec_in = dec_in.permute(0, 1, 3, 2)
-                    #(context, _), residual_connection = self.local_rnns[dec_layer](dec_in)
-                    (context, _), residual_connection = data_parallel(self.local_rnns[dec_layer], dec_in, self.gpus, self.device)
+                    (context, _), residual_connection = self.local_rnns[dec_layer](dec_in)
+                    #(context, _), residual_connection = data_parallel(self.local_rnns[dec_layer], dec_in, self.gpus, self.device)
                 '''
                 layer normalization + residual connection (comes from output
                 of conv layers prior to forward pass through lstm)
                 '''
-                #context = self.lrnn_layer_norms[dec_layer](context + residual_connection)
-                context = data_parallel(self.lrnn_layer_norms[dec_layer], context + residual_connection, self.gpus, self.device)
+                context = self.lrnn_layer_norms[dec_layer](context + residual_connection)
+                #context = data_parallel(self.lrnn_layer_norms[dec_layer], context + residual_connection, self.gpus, self.device)
                 '''
                 use the last hidden layer as the hidden representation
                 '''
@@ -205,11 +206,12 @@ class MedPoseDecoder(nn.Module):
                 as query and context for self attention
                 '''
                 sa_out, residual_connection = self.self_atts[dec_layer](query, past_context)
+                #sa_out, residual_connection = data_parallel(self.self_atts[dec_layer], (query, past_context), self.gpus, self.device)
                 '''
                 layer normalization + residual connection
                 '''
-                #sa_out = self.self_att_layer_norms[dec_layer](sa_out + residual_connection)
-                sa_out = data_parallel(self.self_att_layer_norms[dec_layer], sa_out + residual_connection, self.gpus, self.device)
+                sa_out = self.self_att_layer_norms[dec_layer](sa_out + residual_connection)
+                #sa_out = data_parallel(self.self_att_layer_norms[dec_layer], sa_out + residual_connection, self.gpus, self.device)
                 '''
                 add hidden rnn output to history for attending over past
                 local structures
@@ -225,22 +227,23 @@ class MedPoseDecoder(nn.Module):
                 encoder output as the context
                 '''
                 eda_out, residual_connection = self.enc_dec_atts[dec_layer](sa_out, enc_out)
+                #eda_out, residual_connection = data_parallel(self.enc_dec_atts[dec_layer], (sa_out, enc_out), self.gpus, self.device)
                 '''
                 layer normalization + residual connection
                 '''
-                #eda_out = self.enc_dec_att_layer_norms[dec_layer](eda_out + enc_out)
-                eda_out = data_parallel(self.enc_dec_att_layer_norms[dec_layer], eda_out + enc_out, self.gpus, self.device)
+                eda_out = self.enc_dec_att_layer_norms[dec_layer](eda_out + enc_out)
+                #eda_out = data_parallel(self.enc_dec_att_layer_norms[dec_layer], eda_out + enc_out, self.gpus, self.device)
                 '''
                 transform features non-linearly through feed forward
                 module
                 '''
-                #dec_out = self.ffs[dec_layer](eda_out)
-                dec_out = data_parallel(self.ffs[dec_layer], eda_out, self.gpus, self.device)
+                dec_out = self.ffs[dec_layer](eda_out)
+                #dec_out = data_parallel(self.ffs[dec_layer], eda_out, self.gpus, self.device)
                 '''
                 layer normalization + residual connection
                 '''
-                #dec_out = self.ff_layer_norms[dec_layer](dec_out + eda_out)
-                dec_out = data_parallel(self.ff_layer_norms[dec_layer], dec_out + eda_out, self.gpus, self.device)
+                dec_out = self.ff_layer_norms[dec_layer](dec_out + eda_out)
+                #dec_out = data_parallel(self.ff_layer_norms[dec_layer], dec_out + eda_out, self.gpus, self.device)
             '''
             store current output in decoder history for next layer and, 
             if the next layer history is full, shift history to
@@ -258,27 +261,9 @@ class MedPoseDecoder(nn.Module):
         pass output of last decoder layer to fully connected network for
         pose estimation
         '''
-        #curr_poses_classes = self.pose_cl(dec_out)
-        curr_poses_classes = data_parallel(self.pose_cl, dec_out, self.gpus, self.device)
-        #curr_poses = self.pose_regress(dec_out)
-        curr_poses = data_parallel(self.pose_regress, dec_out, self.gpus, self.device)
+        curr_poses_classes = self.pose_cl(dec_out)
+        #curr_poses_classes = data_parallel(self.pose_cl, dec_out, self.gpus, self.device)
+        curr_poses = self.pose_regress(dec_out)
+        #curr_poses = data_parallel(self.pose_regress, dec_out, self.gpus, self.device)
 
         return curr_poses, curr_poses_classes
-
-def data_parallel(module, x, gpus=None, device=None):
-    
-    if not gpus:
-        if type(x) == list:
-            return module(*x)
-        else:
-            return module(x)
-
-    if device is None:
-        device = gpus[0]
-
-    replicas = nn.parallel.replicate(module, gpus)
-    inputs = nn.parallel.scatter(x, gpus)
-    replicas = replicas[:len(inputs)]
-    outputs = nn.parallel.parallel_apply(replicas, inputs)
-    return nn.parallel.gather(outputs, device)
-
