@@ -58,7 +58,7 @@ def train(args):
     for epoch in range(start_epoch, args.epochs + 1):
         start_time = time.time()
         for train_idx, (batch_videos, batch_keypoints) in enumerate(train_dataloader):
-            module_start_time = time.time()
+            #module_start_time = time.time()
             estimations, classifications = model(batch_videos)
             #print("model forward pass:", time.time() - module_start_time, "seconds")
             #module_start_time = time.time()
@@ -98,7 +98,7 @@ def train(args):
             # write out current epoch and losses and delete memory consuming variables
             train_classification_acc = (sum(classification_accs) / float(len(classification_accs))) * 100
             print("Epoch: {}/{}\tLoss: {:.4f}, {:.4f}\tTrain Classification Accuracy: {:.2f}".format(epoch, args.epochs, estimation_total_loss, classification_total_loss, train_classification_acc), flush=True)
-            print(time.time() - module_start_time, "seconds")
+            #print(time.time() - module_start_time, "seconds")
             del estimations
             del classifications
             del estimation_total_loss

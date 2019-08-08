@@ -58,14 +58,14 @@ class MedPose(nn.Module):
             model as well as region features using extracted feature
             maps and region proposals for current frame
             '''
-            start_time = time.time() 
+            #start_time = time.time() 
             with torch.no_grad():
                 feature_maps, cf_region_features = self.base.extract_base_features(base_in)
-            print(time.time() - start_time, "seconds for base")
-            start_time = time.time()
+            #print(time.time() - start_time, "seconds for base")
+            #start_time = time.time()
             
             enc_out = self.encoder(feature_maps, cf_region_features, initial_frame)
-            print(time.time() - start_time, "seconds for encoder")
+            #print(time.time() - start_time, "seconds for encoder")
             del feature_maps
             del cf_region_features
             torch.cuda.empty_cache()
