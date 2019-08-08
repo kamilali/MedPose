@@ -1,7 +1,9 @@
 import torch.nn as nn
 import torch
-from .mp_layers import MedPoseAttention, MedPoseConvLSTM
+from .mp_layers import MedPoseAttention, MedPoseConvLSTM, MedPoseHistory
 import time
+
+enc_history = MedPoseHistory()
 
 class MedPoseEncoder(nn.Module):
 
@@ -16,14 +18,10 @@ class MedPoseEncoder(nn.Module):
         them for each encoder layer
         '''
         self.num_enc_layers = num_enc_layers
-        self.hist = {}
-        self.hist_device = {}
 
         self.local_rnns = nn.ModuleList()
         self.lrnn_layer_norms = nn.ModuleList()
         self.lrnn_window_size = lrnn_window_size
-        self.hidden_rnn_hist = {}
-        self.hr_hist_device = {}
 
         self.atts = nn.ModuleList()
         self.att_layer_norms = nn.ModuleList()
@@ -33,16 +31,10 @@ class MedPoseEncoder(nn.Module):
         '''
         class variables for parallelism
         '''
-        self.gpus = gpus
-        self.device = gpus[0]
         '''
         initialize stack layers
         '''
         for enc_layer in range(self.num_enc_layers):
-            '''
-            initially no history exists for encoder layers
-            '''
-            self.hist[enc_layer]= []
             '''
             LocalRNN for capturing local structures to attend to
             However, since we are dealing with images, we modify the
@@ -57,16 +49,10 @@ class MedPoseEncoder(nn.Module):
                     batch_first=True,
                     conv2d_req=(enc_layer == 0),
                     conv1d_req=(enc_layer != 0))
-            self.local_rnns.append(nn.DataParallel(local_rnn, device_ids=self.gpus))
+            self.local_rnns.append(local_rnn)
 
             lrnn_layer_norm = nn.LayerNorm(lrnn_hidden_dim, eps=1e-05, elementwise_affine=True)
-            self.lrnn_layer_norms.append(nn.DataParallel(lrnn_layer_norm, device_ids=self.gpus))
-            '''
-            since attention mechanism attends to all local contexts
-            for a particular frame, we store the outputs of all local
-            rnns for a given video
-            '''
-            self.hidden_rnn_hist[enc_layer] = None
+            self.lrnn_layer_norms.append(lrnn_layer_norm)
             '''
             Attention mechanism using region features and current context
             to obtain queries and outputs of LocalRNNs to obtain keys and
@@ -79,10 +65,10 @@ class MedPoseEncoder(nn.Module):
                     value_dim=lrnn_hidden_dim, 
                     model_dim=model_dim,
                     num_att_heads=num_att_heads)
-            self.atts.append(nn.DataParallel(att, device_ids=self.gpus))
+            self.atts.append(att)
 
             att_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
-            self.att_layer_norms.append(nn.DataParallel(att_layer_norm, device_ids=self.gpus))
+            self.att_layer_norms.append(att_layer_norm)
             '''
             feed-forward module to map output of attention layer to final
             encoder output (the above sub-layers can be stacked through
@@ -97,22 +83,14 @@ class MedPoseEncoder(nn.Module):
             self.ffs.append(ff)
 
             ff_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
-            self.ff_layer_norms.append(nn.DataParallel(ff_layer_norm, device_ids=self.gpus))
+            self.ff_layer_norms.append(ff_layer_norm)
     
     def forward(self, feature_maps, cf_region_features, initial_frame=True):
         '''
         check if initial frame of video and clear histories if it is
         '''
         if initial_frame:
-            self.hist = {}
-            self.hist_device = {}
-            self.hidden_rnn_hist = {}
-            self.hr_hist_device = {}
-            for enc_layer in range(self.num_enc_layers):
-                self.hist[enc_layer] = []
-                self.hidden_rnn_hist[enc_layer] = None
-                self.hist_device[enc_layer] = None
-                self.hr_hist_device[enc_layer] = None
+            enc_history.clear()
         '''
         apply LocalRNN to small local window to capture local
         structures and only keep the last hidden state representation
@@ -129,7 +107,7 @@ class MedPoseEncoder(nn.Module):
             based on stored hist for current layer
             '''
             if enc_layer != 0:
-                enc_in = torch.stack(self.hist[enc_layer], dim=1)
+                enc_in = torch.stack(enc_history.get_history(enc_layer), dim=1)
                 enc_in = enc_in.permute(0, 1, 3, 2)
             (context, _), residual_connection = self.local_rnns[enc_layer](enc_in)
             #(context, _), residual_connection = data_parallel(self.local_rnns[enc_layer], enc_in, self.gpus, self.device)
@@ -153,17 +131,22 @@ class MedPoseEncoder(nn.Module):
             add hidden rnn output to history for attending over past 
             local structures
             '''
-            if self.hr_hist_device[enc_layer] is None:
-                self.hr_hist_device[enc_layer] = context.get_device()
-                self.hidden_rnn_hist[enc_layer] = context
+            # if self.hr_hist_device[enc_layer] is None:
+            #     self.hr_hist_device[enc_layer] = context.get_device()
+            #     self.hidden_rnn_hist[enc_layer] = context
+            # else:
+            #     self.hidden_rnn_hist[enc_layer] = torch.cat((self.hidden_rnn_hist[enc_layer], context.to(self.hr_hist_device[enc_layer])), dim=1)
+            if enc_history.get_lrnn_history_device(enc_layer) is None:
+                enc_history.set_lrnn_history_device(enc_layer, context.get_device())
+                enc_history.set_lrnn_history(enc_layer, context)
             else:
-                self.hidden_rnn_hist[enc_layer] = torch.cat((self.hidden_rnn_hist[enc_layer], context.to(self.hr_hist_device[enc_layer])), dim=1)
+                enc_history.set_lrnn_history(enc_layer, torch.cat((enc_history.get_lrnn_history(enc_layer), context.to(enc_history.get_lrnn_history_device(enc_layer))), dim=1))
             '''
             formulate query and past_context for attention
             mechanism
             '''
             query = cf_region_features
-            context = self.hidden_rnn_hist[enc_layer]
+            context = enc_history.get_lrnn_history(enc_layer)
             '''
             attend to local structures using region features as
             queries and outputs of LocalRNNs as context
@@ -193,10 +176,15 @@ class MedPoseEncoder(nn.Module):
             next layer)
             '''
             if enc_layer < (self.num_enc_layers - 1):
-                if self.hist_device[enc_layer + 1] is None:
-                    self.hist_device[enc_layer + 1] = enc_out.get_device()
-                if len(self.hist[enc_layer + 1]) == self.lrnn_window_size:
-                    self.hist[enc_layer + 1] = self.hist[enc_layer + 1][1:]
-                self.hist[enc_layer + 1].append(enc_out.to(self.hist_device[enc_layer + 1]))
+                # if self.hist_device[enc_layer + 1] is None:
+                #     self.hist_device[enc_layer + 1] = enc_out.get_device()
+                # if len(self.hist[enc_layer + 1]) == self.lrnn_window_size:
+                #     self.hist[enc_layer + 1] = self.hist[enc_layer + 1][1:]
+                # self.hist[enc_layer + 1].append(enc_out.to(self.hist_device[enc_layer + 1]))
+                if enc_history.get_history_device(enc_layer + 1) is None:
+                    enc_history.set_history_device(enc_layer + 1, enc_out.get_device())
+                if enc_history.get_history_size(enc_layer + 1) == self.lrnn_window_size:
+                    enc_history.set_history(enc_layer + 1, enc_history.get_history(enc_layer + 1)[1:])
+                enc_history.append_history(enc_layer + 1, enc_out.to(enc_history.get_history_device(enc_layer + 1)))
 
         return enc_out

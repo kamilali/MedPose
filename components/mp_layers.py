@@ -180,3 +180,57 @@ class MedPoseConvLSTM(nn.Module):
         self.lstm.flatten_parameters()
         return self.lstm(r_in), r_in
 
+class MedPoseHistory:
+    def __init__(self):
+        self.history = {}
+        self.history_device = {}
+        self.lrnn_history = {}
+        self.lrnn_history_device = {}
+   
+    def get_history_size(self, layer):
+        if layer not in self.history:
+            return 0
+        return len(self.history[layer])
+
+    def set_history(self, layer, item):
+        self.history[layer] = item
+
+    def append_history(self, layer, item):
+        if layer not in self.history:
+            self.history[layer] = []
+        self.history[layer].append(item)
+    
+    def set_history_device(self, layer, device):
+        self.history_device[layer] = device
+    
+    def set_lrnn_history(self, layer, item):
+        self.lrnn_history[layer] = item
+    
+    def set_lrnn_history_device(self, layer, device):
+        self.lrnn_history_device[layer] = device
+    
+    def get_history(self, layer):
+        if layer not in self.history:
+            return None
+        return self.history[layer]
+    
+    def get_history_device(self, layer):
+        if layer not in self.history_device:
+            return None
+        return self.history_device[layer]
+    
+    def get_lrnn_history(self, layer):
+        if layer not in self.lrnn_history:
+            return None
+        return self.lrnn_history[layer]
+    
+    def get_lrnn_history_device(self, layer):
+        if layer not in self.lrnn_history_device:
+            return None
+        return self.lrnn_history_device[layer]
+    
+    def clear(self):
+        self.history = {}
+        self.history_device = {}
+        self.lrnn_history = {}
+        self.lrnn_history_device = {}

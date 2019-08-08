@@ -15,7 +15,7 @@ class MedPose(nn.Module):
         initialize the MedPose base architecture to extract
         feature maps and region proposals
         '''
-        self.base = MedPoseBase(num_keypoints=num_keypoints, num_rpn_props=num_rpn_props).to(device)
+        self.base = MedPoseBase(num_keypoints=num_keypoints, num_rpn_props=num_rpn_props)
         self.num_rpn_props = num_rpn_props
         '''
         initialize the MedPose encoder architecture with
@@ -23,7 +23,7 @@ class MedPose(nn.Module):
         using feature maps bounded by region proposals as
         queries)
         '''
-        self.encoder = MedPoseEncoder(num_enc_layers=stack_layers, lrnn_window_size=window_size, gpus=gpus[1:], device=device).to(gpus[1])
+        self.encoder = MedPoseEncoder(num_enc_layers=stack_layers, lrnn_window_size=window_size, gpus=gpus[1:], device=device)
         self.window_size = window_size
         '''
         initialize the MedPose decoder architecture with
@@ -31,7 +31,7 @@ class MedPose(nn.Module):
         from previous pose estimations and uses encoder outputs
         as queries for subsequent pose detections)
         '''
-        self.decoder = MedPoseDecoder(num_dec_layers=stack_layers, lrnn_window_size=window_size, gpus=gpus[1:], device=device).to(gpus[1])
+        self.decoder = MedPoseDecoder(num_dec_layers=stack_layers, lrnn_window_size=window_size, gpus=gpus[1:], device=device)
     
     def forward(self, x, pose_detections=[], initial_frame=True):
         '''
