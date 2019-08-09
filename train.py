@@ -2,7 +2,7 @@ import torchvision
 import torch
 from model import MedPose
 from utils import load_train
-from torchnet.meter import mAPMeter
+import numpy as np
 import argparse
 import os
 import time
@@ -56,16 +56,18 @@ def train(args):
     #     if p.requires_grad:
     #         print(name, ":", p.numel())
     # exit()
+    running_counts = []
     for epoch in range(start_epoch, args.epochs + 1):
         start_time = time.time()
         for train_idx, (batch_videos, batch_keypoints) in enumerate(train_dataloader):
-            #module_start_time = time.time()
+            module_start_time = time.time()
             estimations, classifications = model(batch_videos)
-            #print("model forward pass:", time.time() - module_start_time, "seconds")
+            print("model forward pass:", time.time() - module_start_time, "seconds")
             #module_start_time = time.time()
             estimation_total_loss = 0
             classification_total_loss = 0
             classification_accs = []
+            gt_accs = []
             for seq_idx in range(len(estimations)):
                 for batch_idx in range(estimations[seq_idx].shape[0]):
                     pose_estimations = estimations[seq_idx][batch_idx].to(device)
@@ -83,11 +85,17 @@ def train(args):
                     keypoint_labels, classification_labels = generate_labels(pose_estimations, keypoints, 
                              pred_min_bounds, pred_max_bounds, gt_min_bounds, gt_max_bounds)
                     mask = (classification_labels == 1)
-                    oks_score(pose_estimations[mask], keypoints, visibility_labels)
+                    threshold = 0.5
+                    ap, running_counts = compute_ap(pose_estimations[mask], keypoints, visibility_labels, threshold, running_counts)
                     estimation_total_loss += estimation_criterion(pose_estimations, keypoint_labels)
                     classification_total_loss += classification_criterion(classification, classification_labels)
-                    classification_acc = torch.sum(torch.max(classification, dim=1)[1].float() == classification_labels.float()).item() / float(classification.shape[0])
+                    pred_labels = torch.max(classification, dim=1)[1]
+                    classification_acc = torch.sum(pred_labels == classification_labels).item() / float(classification.shape[0])
+                    masked_class_labels = classification_labels.clone()
+                    masked_class_labels[pred_labels == 0] = 1
+                    gt_acc = torch.sum(pred_labels == masked_class_labels).item() / float(keypoints.shape[0])
                     classification_accs.append(classification_acc)
+                    gt_accs.append(gt_acc)
                     del classification_acc
                     del pose_estimations
                     del classification
@@ -102,7 +110,8 @@ def train(args):
             optimizer.step()
             # write out current epoch and losses and delete memory consuming variables
             train_classification_acc = (sum(classification_accs) / float(len(classification_accs))) * 100
-            print("Epoch: {}/{}\tLoss: {:.4f}, {:.4f}\tTrain Classification Accuracy: {:.2f}".format(epoch, args.epochs, estimation_total_loss, classification_total_loss, train_classification_acc), flush=True)
+            train_gt_acc = (sum(gt_accs) / float(len(gt_accs))) * 100
+            print("Epoch: {}/{}\tLoss: {:.4f}, {:.4f}\tTrain Classification Accuracy: {:.2f}, {:.2f}\tAP@{}: {:.2f}".format(epoch, args.epochs, estimation_total_loss, classification_total_loss, train_classification_acc, train_gt_acc, threshold, ap), flush=True)
             #print(time.time() - module_start_time, "seconds")
             del estimations
             del classifications
@@ -124,7 +133,8 @@ def train(args):
         if epoch != 0:
             torch.save(model.state_dict(), "model_repository/model-{}{}".format(epoch, args.model_suffix))
 
-def oks_score(pred_tensor, gt_tensor, visibility_tensor):
+def compute_ap(pred_tensor, gt_tensor, visibility_tensor, threshold, running_counts=[]):
+    object_oks_scores = torch.zeros(visibility_tensor.shape[0]).float()
     for object_idx in range(visibility_tensor.shape[0]):
         labeled_keypoints = torch.sum(visibility_tensor[object_idx] > 0)
         pred_keypoints = pred_tensor[object_idx]
@@ -133,8 +143,17 @@ def oks_score(pred_tensor, gt_tensor, visibility_tensor):
         s = 1
         k = 1
         oks = torch.sum(torch.exp(torch.neg(torch.pow(d, 2)) / (2 * (s ** 2) * (k ** 2)))) / labeled_keypoints
-        print(oks)
-        exit()
+        object_oks_scores[object_idx] = oks
+    # compute mean average precision of oks scores (similar to evaluation server)
+    true_pos = torch.sum(object_oks_scores > threshold)
+    false_pos = torch.sum(object_oks_scores <= threshold)
+    if len(running_counts) == 0:
+        running_counts = [true_pos, false_pos]
+    else:
+        running_counts += [true_pos, false_pos]
+    ap = true_pos / (true_pos + false_pos)
+    return ap, running_counts
+
 
 def generate_labels(pred_tensor, gt_tensor, pred_min_bounds, pred_max_bounds, gt_min_bounds, gt_max_bounds):
     matched_gt_tensor = pred_tensor.clone()
