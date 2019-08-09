@@ -57,8 +57,6 @@ class PoseTrackDataset(Dataset):
             video_frames = []
             frame_keypoints = []
             for image_idx, selected_im in enumerate(posetrack_images):
-                # video_frame = Image.open(os.path.join(posetrack_dir, selected_im['file_name']))
-                # video_frame = self.transform(video_frame)
                 video_frame = os.path.join(posetrack_dir, selected_im['file_name'])
                 video_frames.append(video_frame)
                 ann_ids = coco.getAnnIds(imgIds=selected_im['id'])
@@ -69,7 +67,8 @@ class PoseTrackDataset(Dataset):
                         kp = np.array(ann['keypoints'])
                         x = kp[0::3]
                         y = kp[1::3]
-                        keypoints = torch.from_numpy(np.stack((x, y), axis=-1)).float()
+                        v = kp[2::3]
+                        keypoints = torch.from_numpy(np.stack((x, y, v), axis=-1)).float()
                         people_keypoints.append(keypoints)
 
                 frame_keypoints.append(torch.stack(people_keypoints, dim=0))

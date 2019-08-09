@@ -2,6 +2,7 @@ import torchvision
 import torch
 from model import MedPose
 from utils import load_train
+from torchnet.meter import mAPMeter
 import argparse
 import os
 import time
@@ -72,6 +73,8 @@ def train(args):
                             pose_estimations.shape[0], 2, num_keypoints).permute(0, 2, 1)
                     classification = classifications[seq_idx][batch_idx].to(device)
                     keypoints = batch_keypoints[seq_idx][batch_idx].to(device)
+                    visibility_labels = keypoints[:,:,2]
+                    keypoints = keypoints[:,:,:2]
                     # get tight bounding box from keypoints
                     gt_min_bounds, gt_max_bounds = find_bounds_from_keypoints(keypoints)
                     # get bounding box from pose estimations
@@ -79,6 +82,8 @@ def train(args):
                     # generate labels to compute loss for regression and classification
                     keypoint_labels, classification_labels = generate_labels(pose_estimations, keypoints, 
                              pred_min_bounds, pred_max_bounds, gt_min_bounds, gt_max_bounds)
+                    mask = (classification_labels == 1)
+                    oks_score(pose_estimations[mask], keypoints, visibility_labels)
                     estimation_total_loss += estimation_criterion(pose_estimations, keypoint_labels)
                     classification_total_loss += classification_criterion(classification, classification_labels)
                     classification_acc = torch.sum(torch.max(classification, dim=1)[1].float() == classification_labels.float()).item() / float(classification.shape[0])
@@ -119,9 +124,22 @@ def train(args):
         if epoch != 0:
             torch.save(model.state_dict(), "model_repository/model-{}{}".format(epoch, args.model_suffix))
 
+def oks_score(pred_tensor, gt_tensor, visibility_tensor):
+    for object_idx in range(visibility_tensor.shape[0]):
+        labeled_keypoints = torch.sum(visibility_tensor[object_idx] > 0)
+        pred_keypoints = pred_tensor[object_idx]
+        gt_keypoints = gt_tensor[object_idx]
+        d = torch.sum(torch.pow((pred_keypoints - gt_keypoints), 2), dim=1)
+        s = 1
+        k = 1
+        oks = torch.sum(torch.exp(torch.neg(torch.pow(d, 2)) / (2 * (s ** 2) * (k ** 2)))) / labeled_keypoints
+        print(oks)
+        exit()
+
 def generate_labels(pred_tensor, gt_tensor, pred_min_bounds, pred_max_bounds, gt_min_bounds, gt_max_bounds):
     matched_gt_tensor = pred_tensor.clone()
     classification_labels = torch.zeros(pred_tensor.shape[0]).long().to(device)
+    used = set()
     for gt_region_idx in range(gt_tensor.shape[0]):
         max_sim_score = -1
         max_pred_idx = -1
@@ -129,7 +147,7 @@ def generate_labels(pred_tensor, gt_tensor, pred_min_bounds, pred_max_bounds, gt
             sim_score = iou_score(
                     pred_min_bounds[pred_region_idx], pred_max_bounds[pred_region_idx],
                     gt_min_bounds[gt_region_idx], gt_max_bounds[gt_region_idx])
-            if sim_score > max_sim_score:
+            if sim_score > max_sim_score and pred_region_idx not in used:
                 max_sim_score = sim_score
                 max_pred_idx = pred_region_idx
         matched_gt_tensor[max_pred_idx] = gt_tensor[gt_region_idx]
@@ -137,6 +155,7 @@ def generate_labels(pred_tensor, gt_tensor, pred_min_bounds, pred_max_bounds, gt
         #if max_sim_score > thresh:
         #    classification_labels[max_pred_idx] = 1
         classification_labels[max_pred_idx] = 1
+        used.add(max_pred_idx)
     return matched_gt_tensor, classification_labels
 
 def iou_score(t1_min_bounds, t1_max_bounds, t2_min_bounds, t2_max_bounds):
