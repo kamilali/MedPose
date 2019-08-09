@@ -27,8 +27,7 @@ def train(args):
     DEVICES = [i for i in range(args.gpus)]
 
     window_size = 5
-    per_gpu_batch_size = 1
-    batch_size = per_gpu_batch_size * (len(DEVICES) - 1)
+    batch_size = args.batch_per_gpu * (len(DEVICES) - 1)
     num_keypoints = 17
 
     train_dataloader, valid_dataloader = load_train(batch_size=batch_size, device=device)
@@ -84,15 +83,19 @@ def train(args):
                     # generate labels to compute loss for regression and classification
                     keypoint_labels, classification_labels = generate_labels(pose_estimations, keypoints, 
                              pred_min_bounds, pred_max_bounds, gt_min_bounds, gt_max_bounds)
-                    mask = (classification_labels == 1)
-                    threshold = 0.5
-                    ap, running_counts = compute_ap(pose_estimations[mask], keypoints, visibility_labels, threshold, running_counts)
+                    # loss function
                     estimation_total_loss += estimation_criterion(pose_estimations, keypoint_labels)
                     classification_total_loss += classification_criterion(classification, classification_labels)
+                    # compute average precision 
+                    mask = (classification_labels == 1).nonzero().squeeze(dim=1)
+                    threshold = 0.5
+                    ap, _ = compute_ap(pose_estimations[mask], keypoints, visibility_labels, threshold, running_counts)
+                    # classification accuracy (but unbalanced... way more 0s than 1s)
                     pred_labels = torch.max(classification, dim=1)[1]
                     classification_acc = torch.sum(pred_labels == classification_labels).item() / float(classification.shape[0])
+                    # classification accuracy of gt (balanced)
                     masked_class_labels = classification_labels.clone()
-                    masked_class_labels[pred_labels == 0] = 1
+                    masked_class_labels[(pred_labels == 0).nonzero()] = 1
                     gt_acc = torch.sum(pred_labels == masked_class_labels).item() / float(keypoints.shape[0])
                     classification_accs.append(classification_acc)
                     gt_accs.append(gt_acc)
@@ -139,7 +142,9 @@ def compute_ap(pred_tensor, gt_tensor, visibility_tensor, threshold, running_cou
         labeled_keypoints = torch.sum(visibility_tensor[object_idx] > 0)
         pred_keypoints = pred_tensor[object_idx]
         gt_keypoints = gt_tensor[object_idx]
-        d = torch.sum(torch.pow((pred_keypoints - gt_keypoints), 2), dim=1)
+        pred_keypoints = pred_keypoints[(visibility_tensor[object_idx] > 0).nonzero()]
+        gt_keypoints = gt_keypoints[(visibility_tensor[object_idx] > 0).nonzero()]
+        d = torch.sqrt(torch.sum(torch.pow((pred_keypoints - gt_keypoints), 2), dim=1))
         s = 1
         k = 1
         oks = torch.sum(torch.exp(torch.neg(torch.pow(d, 2)) / (2 * (s ** 2) * (k ** 2)))) / labeled_keypoints
@@ -151,7 +156,7 @@ def compute_ap(pred_tensor, gt_tensor, visibility_tensor, threshold, running_cou
         running_counts = [true_pos, false_pos]
     else:
         running_counts += [true_pos, false_pos]
-    ap = true_pos / (true_pos + false_pos)
+    ap = float(running_counts[0]) / sum(running_counts)
     return ap, running_counts
 
 
@@ -210,6 +215,7 @@ if __name__ == '__main__':
     parser.add_argument("--model_suffix", default=".pth")
     parser.add_argument("--epochs", default=1, type=int)
     parser.add_argument("--gpus", default=2, type=int)
+    parser.add_argument("--batch_per_gpu", default=1, type=int)
     parser.add_argument("--lr", default=0.01, type=float)
     args = parser.parse_args()
     # check if model repository exists otherwise create it
