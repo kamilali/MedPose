@@ -106,10 +106,6 @@ class MedPoseEncoder(nn.Module):
                 enc_in = enc_in.permute(0, 1, 3, 2)
             (context, _), residual_connection = self.local_rnns[enc_layer](enc_in)
             #(context, _), residual_connection = data_parallel(self.local_rnns[enc_layer], enc_in, self.gpus, self.device)
-            if enc_layer == 0:
-                del feature_maps
-            else:
-                del enc_in
             #torch.cuda.empty_cache()
             '''
             layer normalization + residual connection (comes from output

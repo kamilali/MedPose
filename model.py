@@ -69,8 +69,6 @@ class MedPose(nn.Module):
             
             enc_out = self.encoder(feature_maps, cf_region_features, initial_frame)
             #print(time.time() - start_time, "seconds for encoder")
-            del feature_maps
-            del cf_region_features
             #torch.cuda.empty_cache()
             
             if len(pose_detections) == 0:
@@ -85,9 +83,6 @@ class MedPose(nn.Module):
             pose_classifications = pose_classifications[-self.window_size:]
             initial_frame = False
 
-            del enc_out
-            del curr_pose_estimation
-            del curr_pose_classes
             #torch.cuda.empty_cache()
 
         return pose_detections, pose_classifications

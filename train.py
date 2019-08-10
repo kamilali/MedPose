@@ -59,9 +59,9 @@ def train(args):
     for epoch in range(start_epoch, args.epochs + 1):
         start_time = time.time()
         for train_idx, (batch_videos, batch_keypoints) in enumerate(train_dataloader):
-            module_start_time = time.time()
+            #module_start_time = time.time()
             estimations, classifications = model(batch_videos)
-            print("model forward pass:", time.time() - module_start_time, "seconds")
+            #print("model forward pass:", time.time() - module_start_time, "seconds")
             #module_start_time = time.time()
             estimation_total_loss = 0
             classification_total_loss = 0
@@ -99,12 +99,6 @@ def train(args):
                     gt_acc = torch.sum(pred_labels == masked_class_labels).item() / float(keypoints.shape[0])
                     classification_accs.append(classification_acc)
                     gt_accs.append(gt_acc)
-                    del classification_acc
-                    del pose_estimations
-                    del classification
-                    del keypoints
-                    del keypoint_labels
-                    del classification_labels
             #print("labels + loss computation:", time.time() - module_start_time, "seconds")
             # backpropogate gradients from loss functions and update weights
             optimizer.zero_grad()
@@ -116,11 +110,6 @@ def train(args):
             train_gt_acc = (sum(gt_accs) / float(len(gt_accs))) * 100
             print("Epoch: {}/{}\tLoss: {:.4f}, {:.4f}\tTrain Classification Accuracy: {:.2f}, {:.2f}\tAP@{}: {:.2f}".format(epoch, args.epochs, estimation_total_loss, classification_total_loss, train_classification_acc, train_gt_acc, threshold, ap), flush=True)
             #print(time.time() - module_start_time, "seconds")
-            del estimations
-            del classifications
-            del estimation_total_loss
-            del classification_total_loss
-            del classification_accs
         print("Time to complete epoch: {} seconds".format(time.time() - start_time))
         # save state every epoch in case of preemption
         state = {
