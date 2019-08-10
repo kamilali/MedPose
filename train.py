@@ -142,8 +142,8 @@ def compute_ap(pred_tensor, gt_tensor, visibility_tensor, threshold, running_cou
         labeled_keypoints = torch.sum(visibility_tensor[object_idx] > 0)
         pred_keypoints = pred_tensor[object_idx]
         gt_keypoints = gt_tensor[object_idx]
-        pred_keypoints = pred_keypoints[(visibility_tensor[object_idx] > 0).nonzero()]
-        gt_keypoints = gt_keypoints[(visibility_tensor[object_idx] > 0).nonzero()]
+        pred_keypoints = pred_keypoints[(visibility_tensor[object_idx] > 0).nonzero().squeeze(dim=1)]
+        gt_keypoints = gt_keypoints[(visibility_tensor[object_idx] > 0).nonzero().squeeze(dim=1)]
         d = torch.sqrt(torch.sum(torch.pow((pred_keypoints - gt_keypoints), 2), dim=1))
         s = 1
         k = 1

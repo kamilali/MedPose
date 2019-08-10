@@ -1,6 +1,7 @@
 from components.mp_base import MedPoseBase
 from components.mp_encoder import MedPoseEncoder
 from components.mp_decoder import MedPoseDecoder
+from components.mp_layers import MedPoseHistory
 import torch.nn as nn
 import torch
 import torchvision
@@ -23,7 +24,8 @@ class MedPose(nn.Module):
         using feature maps bounded by region proposals as
         queries)
         '''
-        self.encoder = MedPoseEncoder(num_enc_layers=stack_layers, lrnn_window_size=window_size, gpus=gpus[1:], device=device)
+        encoder_history = [MedPoseHistory() for i in gpus[1:]]
+        self.encoder = MedPoseEncoder(num_enc_layers=stack_layers, enc_history=encoder_history, lrnn_window_size=window_size, gpus=gpus[1:], device=device)
         self.window_size = window_size
         '''
         initialize the MedPose decoder architecture with
@@ -31,7 +33,8 @@ class MedPose(nn.Module):
         from previous pose estimations and uses encoder outputs
         as queries for subsequent pose detections)
         '''
-        self.decoder = MedPoseDecoder(num_dec_layers=stack_layers, lrnn_window_size=window_size, gpus=gpus[1:], device=device)
+        decoder_history = [MedPoseHistory() for i in gpus[1:]]
+        self.decoder = MedPoseDecoder(num_dec_layers=stack_layers, dec_history=decoder_history, lrnn_window_size=window_size, gpus=gpus[1:], device=device)
     
     def forward(self, x, pose_detections=[], initial_frame=True):
         '''

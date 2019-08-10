@@ -1,14 +1,12 @@
 import torch.nn as nn
 import torch
-from .mp_layers import MedPoseAttention, MedPoseConvLSTM, MedPoseHistory
-
-dec_history = MedPoseHistory()
+from .mp_layers import MedPoseAttention, MedPoseConvLSTM
 
 class MedPoseDecoder(nn.Module):
 
     def __init__(self, num_dec_layers=3, num_att_heads=4, num_lrnn_layers=3,
             model_dim=256, lrnn_hidden_dim=256, ff_hidden_dim=1024,
-            roi_map_dim=7, lrnn_window_size=3, num_keypoints=17, gpus=None, device=None):
+            roi_map_dim=7, lrnn_window_size=3, num_keypoints=17, dec_history=[], gpus=None, device=None):
         super(MedPoseDecoder, self).__init__()
         '''
         store number of decoder layers and a dictionary containing
@@ -17,6 +15,7 @@ class MedPoseDecoder(nn.Module):
         them for each decoder layer
         '''
         self.num_dec_layers = num_dec_layers
+        self.dec_history = dec_history
 
         self.local_rnns = nn.ModuleList()
         self.lrnn_layer_norms = nn.ModuleList()
@@ -30,9 +29,6 @@ class MedPoseDecoder(nn.Module):
 
         self.ffs = nn.ModuleList()
         self.ff_layer_norms = nn.ModuleList()
-        '''
-        class variables for parallelism
-        '''
         '''
         initialize stack layers
         '''
@@ -120,19 +116,16 @@ class MedPoseDecoder(nn.Module):
                     nn.Dropout(0.1),
                     nn.Linear(64, num_keypoints * 2)
                 )
-    
+
     def forward(self, enc_out, poses=None, initial_frame=True):
-        '''
-        check if initial frame of video and clear histories if it is
-        '''
-        if initial_frame:
-            dec_history.clear()
         '''
         stack decoders based on number of decoder layers specified
         '''
         for dec_layer in range(self.num_dec_layers):
             #input("entered decoder layer " + str(dec_layer))
             if initial_frame:
+                self.dec_history[enc_out.get_device() - 1].reset()
+                curr_dec_hist = self.dec_history[enc_out.get_device() - 1]
                 '''
                 use encoder as query and context for first pose detection
                 (skip the first two layers of the decoder since those
@@ -157,13 +150,14 @@ class MedPoseDecoder(nn.Module):
                 dec_out = self.ff_layer_norms[dec_layer](dec_out + eda_out)
                 #dec_out = data_parallel(self.ff_layer_norms[dec_layer], dec_out + eda_out, self.gpus, self.device)
             else:
+                curr_dec_hist = self.dec_history[enc_out.get_device() - 1]
                 if dec_layer == 0:
                     poses = poses[:, -self.lrnn_window_size:]
                     poses = poses.permute(0, 1, 3, 2)
                     (context, _), residual_connection = self.local_rnns[dec_layer](poses)
                     #(context, _), residual_connection = data_parallel(self.local_rnns[dec_layer], poses, self.gpus, self.device)
                 else:
-                    dec_in = torch.stack(dec_history.get_history(dec_layer), dim=1)
+                    dec_in = torch.stack(curr_dec_hist.get_history(dec_layer), dim=1)
                     dec_in = dec_in.permute(0, 1, 3, 2)
                     (context, _), residual_connection = self.local_rnns[dec_layer](dec_in)
                     #(context, _), residual_connection = data_parallel(self.local_rnns[dec_layer], dec_in, self.gpus, self.device)
@@ -183,7 +177,7 @@ class MedPoseDecoder(nn.Module):
                 mechanism
                 '''
                 query = context
-                past_context = dec_history.get_lrnn_history(dec_layer)
+                past_context = curr_dec_hist.get_lrnn_history(dec_layer)
                 if past_context is None:
                     past_context = context
                 '''
@@ -206,11 +200,12 @@ class MedPoseDecoder(nn.Module):
                 #     self.hidden_rnn_hist[dec_layer] = context
                 # else:
                 #     self.hidden_rnn_hist[dec_layer] = torch.cat((self.hidden_rnn_hist[dec_layer], context.to(self.hr_hist_device[dec_layer])), dim=1)
-                if dec_history.get_lrnn_history_device(dec_layer) is None:
-                    dec_history.set_lrnn_history_device(dec_layer, context.get_device())
-                    dec_history.set_lrnn_history(dec_layer, context)
+                if curr_dec_hist.get_lrnn_history(dec_layer) is None:
+                    #curr_dec_hist.set_lrnn_history_device(dec_layer, context.get_device())
+                    curr_dec_hist.set_lrnn_history(dec_layer, context)
                 else:
-                    dec_history.set_lrnn_history(dec_layer, torch.cat((dec_history.get_lrnn_history(dec_layer), context.to(dec_history.get_lrnn_history_device(dec_layer))), dim=1))
+                    #curr_dec_hist.set_lrnn_history(dec_layer, torch.cat((curr_dec_hist.get_lrnn_history(dec_layer), context.to(curr_dec_hist.get_lrnn_history_device(dec_layer))), dim=1))
+                    curr_dec_hist.set_lrnn_history(dec_layer, torch.cat((curr_dec_hist.get_lrnn_history(dec_layer), context), dim=1))
                 '''
                 attend to local structures using output of prior
                 attention layer as queries and the corresponding
@@ -246,11 +241,12 @@ class MedPoseDecoder(nn.Module):
                 # if len(self.hist[dec_layer + 1]) == self.lrnn_window_size:
                 #     self.hist[dec_layer + 1] = self.hist[dec_layer + 1][1:]
                 # self.hist[dec_layer + 1].append(dec_out.to(self.hist_device[dec_layer + 1]))
-                if dec_history.get_history_device(dec_layer + 1) is None:
-                    dec_history.set_history_device(dec_layer + 1, dec_out.get_device())
-                if dec_history.get_history_size(dec_layer + 1) == self.lrnn_window_size:
-                    dec_history.set_history(dec_layer + 1, dec_history.get_history(dec_layer + 1)[1:])
-                dec_history.append_history(dec_layer + 1, dec_out.to(dec_history.get_history_device(dec_layer + 1)))
+                #if curr_dec_hist.get_history_device(dec_layer + 1) is None:
+                #    curr_dec_hist.set_history_device(dec_layer + 1, dec_out.get_device())
+                if curr_dec_hist.get_history_size(dec_layer + 1) == self.lrnn_window_size:
+                    curr_dec_hist.set_history(dec_layer + 1, curr_dec_hist.get_history(dec_layer + 1)[1:])
+                #curr_dec_hist.append_history(dec_layer + 1, dec_out.to(curr_dec_hist.get_history_device(dec_layer + 1)))
+                curr_dec_hist.append_history(dec_layer + 1, dec_out)
             
         '''
         pass output of last decoder layer to fully connected network for
