@@ -110,7 +110,7 @@ class MedPoseEncoder(nn.Module):
                 del feature_maps
             else:
                 del enc_in
-            torch.cuda.empty_cache()
+            #torch.cuda.empty_cache()
             '''
             layer normalization + residual connection (comes from output
             of conv layers prior to forward pass through lstm)

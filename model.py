@@ -71,7 +71,7 @@ class MedPose(nn.Module):
             #print(time.time() - start_time, "seconds for encoder")
             del feature_maps
             del cf_region_features
-            torch.cuda.empty_cache()
+            #torch.cuda.empty_cache()
             
             if len(pose_detections) == 0:
                 curr_pose_estimation, curr_pose_classes = self.decoder(enc_out, None, initial_frame)
@@ -88,6 +88,6 @@ class MedPose(nn.Module):
             del enc_out
             del curr_pose_estimation
             del curr_pose_classes
-            torch.cuda.empty_cache()
+            #torch.cuda.empty_cache()
 
         return pose_detections, pose_classifications
