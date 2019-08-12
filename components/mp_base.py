@@ -79,8 +79,33 @@ class MedPoseBase(nn.Module):
         (only current frame region features used as query)
         '''
         region_props = self._extract_regions(feature_maps, images, targets)
+        '''
+        visualize region props (default: no)
+        '''
+        #self._visualize_region_props(images, region_props)
         cf_region_features = self._extract_roi(feature_maps, images, region_props)
         cf_region_features = cf_region_features.view(batch_size, self.num_rpn_props, 
                 cf_region_features.shape[1], cf_region_features.shape[2], cf_region_features.shape[3])
         frame_feature_maps = torch.stack(frame_feature_maps, dim=1)
         return frame_feature_maps, cf_region_features
+
+    def _visualize_region_props(self, images, region_props):
+        '''
+        plot setup
+        '''
+        fig, ax = plt.subplots(1)
+        images = images.tensors
+        for img_idx, region_prop in enumerate(region_props):
+            # get image for current region_prop
+            image = images[img_idx].permute(1,2,0).cpu().numpy()
+            ax.imshow(image)
+            for region_idx in range(region_prop.shape[0]):
+                bbox = torch.round(region_prop[region_idx])
+                x1 = bbox[0].item()
+                y1 = bbox[1].item()
+                x2 = bbox[2].item()
+                y2 = bbox[3].item()
+                rect = patches.Rectangle((x1, y1), (x2 - x1), (y2 - y1), linewidth=1,edgecolor='r',facecolor='none')
+                ax.add_patch(rect)
+        plt.show()
+        plt.cla()

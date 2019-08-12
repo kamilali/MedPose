@@ -6,6 +6,7 @@ import numpy as np
 import argparse
 import os
 import time
+import matplotlib.pyplot as plt
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -77,7 +78,7 @@ def train(args):
                     visibility_labels = keypoints[:,:,2]
                     keypoints = keypoints[:,:,:2]
                     # get tight bounding box from keypoints
-                    gt_min_bounds, gt_max_bounds = find_bounds_from_keypoints(keypoints)
+                    gt_min_bounds, gt_max_bounds, gt_areas = find_bounds_from_keypoints(keypoints, with_area=True)
                     # get bounding box from pose estimations
                     pred_min_bounds, pred_max_bounds = find_bounds_from_keypoints(pose_estimations)
                     # generate labels to compute loss for regression and classification
@@ -89,7 +90,7 @@ def train(args):
                     # compute average precision 
                     mask = (classification_labels == 1).nonzero().squeeze(dim=1)
                     threshold = 0.5
-                    ap, _ = compute_ap(pose_estimations[mask], keypoints, visibility_labels, threshold, running_counts)
+                    ap, _ = compute_ap(pose_estimations[mask], keypoints, visibility_labels, gt_areas, threshold, running_counts)
                     # classification accuracy (but unbalanced... way more 0s than 1s)
                     pred_labels = torch.max(classification, dim=1)[1]
                     classification_acc = torch.sum(pred_labels == classification_labels).item() / float(classification.shape[0])
@@ -99,6 +100,9 @@ def train(args):
                     gt_acc = torch.sum(pred_labels == masked_class_labels).item() / float(keypoints.shape[0])
                     classification_accs.append(classification_acc)
                     gt_accs.append(gt_acc)
+                    # visualizations
+                    # visualize_keypoints(batch_videos[batch_idx][seq_idx], keypoints, pose_estimations[mask], classification_labels)
+                    # visualize_classifications(batch_videos[batch_idx][seq_idx], keypoint_labels, pose_estimations, classification_labels)
             #print("labels + loss computation:", time.time() - module_start_time, "seconds")
             # backpropogate gradients from loss functions and update weights
             optimizer.zero_grad()
@@ -125,7 +129,7 @@ def train(args):
         if epoch != 0:
             torch.save(model.state_dict(), "model_repository/model-{}{}".format(epoch, args.model_suffix))
 
-def compute_ap(pred_tensor, gt_tensor, visibility_tensor, threshold, running_counts=[]):
+def compute_ap(pred_tensor, gt_tensor, visibility_tensor, gt_areas, threshold, running_counts=[]):
     object_oks_scores = torch.zeros(visibility_tensor.shape[0]).float()
     for object_idx in range(visibility_tensor.shape[0]):
         labeled_keypoints = torch.sum(visibility_tensor[object_idx] > 0)
@@ -134,9 +138,9 @@ def compute_ap(pred_tensor, gt_tensor, visibility_tensor, threshold, running_cou
         pred_keypoints = pred_keypoints[(visibility_tensor[object_idx] > 0).nonzero().squeeze(dim=1)]
         gt_keypoints = gt_keypoints[(visibility_tensor[object_idx] > 0).nonzero().squeeze(dim=1)]
         d = torch.sqrt(torch.sum(torch.pow((pred_keypoints - gt_keypoints), 2), dim=1))
-        s = 1
-        k = 1
-        oks = torch.sum(torch.exp(torch.neg(torch.pow(d, 2)) / (2 * (s ** 2) * (k ** 2)))) / labeled_keypoints
+        s = torch.sqrt(gt_areas[object_idx])
+        k = 1 * (d / s.float()) # 2 standard deviations fall off
+        oks = torch.sum(torch.exp(torch.neg(torch.pow(d, 2)) / (2 * (s ** 2) * (k ** 2)))) / labeled_keypoints.float()
         object_oks_scores[object_idx] = oks
     # compute mean average precision of oks scores (similar to evaluation server)
     true_pos = torch.sum(object_oks_scores > threshold)
@@ -148,6 +152,28 @@ def compute_ap(pred_tensor, gt_tensor, visibility_tensor, threshold, running_cou
     ap = float(running_counts[0]) / sum(running_counts)
     return ap, running_counts
 
+def visualize_keypoints(image, gt_keypoints, pred_keypoints, classifications):
+    # plot image
+    image = image.permute(1, 2, 0).cpu().numpy()
+    plt.imshow(image)
+    for person_idx in range(gt_keypoints.shape[0]):
+        gt_points = gt_keypoints[person_idx]
+        pred_points = pred_keypoints[person_idx]
+        gt_x = gt_points[:,0].tolist()
+        gt_y = gt_points[:,1].tolist()
+        pred_x = pred_points[:,0].tolist()
+        pred_y = pred_points[:,1].tolist()
+        print(len(pred_x))
+        print(len(pred_y))
+        # plot green points for gt_keypoints
+        plt.scatter(x=gt_x, y=gt_y, c='g', s=10)
+        # plot blue points for pred_keypoints
+        plt.scatter(x=pred_x, y=pred_y, c='r', s=10)
+    plt.show()
+    exit()
+
+def visualize_classifications(image, gt_bboxes, pred_bboxes, classifications):
+    pass
 
 def generate_labels(pred_tensor, gt_tensor, pred_min_bounds, pred_max_bounds, gt_min_bounds, gt_max_bounds):
     matched_gt_tensor = pred_tensor.clone()
@@ -193,9 +219,13 @@ def iou_score(t1_min_bounds, t1_max_bounds, t2_min_bounds, t2_max_bounds):
     union_area = torch.mul(union_vals[0], union_vals[1])
     return torch.div(intersection_area, union_area.float())
 
-def find_bounds_from_keypoints(keypoints):
+def find_bounds_from_keypoints(keypoints, with_area=False):
     min_bounds, _ = torch.min(keypoints, dim=1)
     max_bounds, _ = torch.max(keypoints, dim=1)
+    if with_area:
+        diffs = max_bounds - min_bounds
+        area = diffs[:,0] * diffs[:,1]
+        return min_bounds, max_bounds, area
     return min_bounds, max_bounds
 
 if __name__ == '__main__':
