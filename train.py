@@ -7,6 +7,7 @@ import argparse
 import os
 import time
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -84,11 +85,12 @@ def train(args):
                     # generate labels to compute loss for regression and classification
                     keypoint_labels, classification_labels = generate_labels(pose_estimations, keypoints, 
                              pred_min_bounds, pred_max_bounds, gt_min_bounds, gt_max_bounds)
+                    # mask to only get estimations that directly correspond to human poses
+                    mask = (classification_labels == 1).nonzero().squeeze(dim=1)
                     # loss function
-                    estimation_total_loss += estimation_criterion(pose_estimations, keypoint_labels)
+                    estimation_total_loss += estimation_criterion(pose_estimations[mask], keypoints)
                     classification_total_loss += classification_criterion(classification, classification_labels)
                     # compute average precision 
-                    mask = (classification_labels == 1).nonzero().squeeze(dim=1)
                     threshold = 0.5
                     ap, _ = compute_ap(pose_estimations[mask], keypoints, visibility_labels, gt_areas, threshold, running_counts)
                     # classification accuracy (but unbalanced... way more 0s than 1s)
@@ -101,8 +103,7 @@ def train(args):
                     classification_accs.append(classification_acc)
                     gt_accs.append(gt_acc)
                     # visualizations
-                    # visualize_keypoints(batch_videos[batch_idx][seq_idx], keypoints, pose_estimations[mask], classification_labels)
-                    # visualize_classifications(batch_videos[batch_idx][seq_idx], keypoint_labels, pose_estimations, classification_labels)
+                    # visualize_predictions_and_gts(batch_videos[batch_idx][seq_idx], keypoints, pose_estimations[mask], visibility_labels)
             #print("labels + loss computation:", time.time() - module_start_time, "seconds")
             # backpropogate gradients from loss functions and update weights
             optimizer.zero_grad()
@@ -152,28 +153,47 @@ def compute_ap(pred_tensor, gt_tensor, visibility_tensor, gt_areas, threshold, r
     ap = float(running_counts[0]) / sum(running_counts)
     return ap, running_counts
 
-def visualize_keypoints(image, gt_keypoints, pred_keypoints, classifications):
+def visualize_predictions_and_gts(image, gt_keypoints, pred_keypoints, visibility_labels):
+    # get bboxes from keypoints
+    gt_min_bounds, gt_max_bounds = find_bounds_from_keypoints(gt_keypoints)
+    pred_min_bounds, pred_max_bounds = find_bounds_from_keypoints(pred_keypoints)
     # plot image
+    fig, ax = plt.subplots(1)
     image = image.permute(1, 2, 0).cpu().numpy()
-    plt.imshow(image)
+    ax.imshow(image)
     for person_idx in range(gt_keypoints.shape[0]):
-        gt_points = gt_keypoints[person_idx]
-        pred_points = pred_keypoints[person_idx]
+        gt_points = gt_keypoints[person_idx][(visibility_labels[person_idx] > 0).nonzero().squeeze(dim=1)]
+        pred_points = pred_keypoints[person_idx][(visibility_labels[person_idx] > 0).nonzero().squeeze(dim=1)]
+        gt_bbox = torch.cat(find_bounds_from_keypoints(gt_points.unsqueeze(dim=0)), dim=1).squeeze(dim=0)
+        pred_bbox = torch.cat(find_bounds_from_keypoints(pred_points.unsqueeze(dim=0)), dim=1).squeeze(dim=0)
+        gt_bbox = torch.round(gt_bbox)
+        pred_bbox = torch.round(pred_bbox)
+        # plot keypoints
         gt_x = gt_points[:,0].tolist()
         gt_y = gt_points[:,1].tolist()
         pred_x = pred_points[:,0].tolist()
         pred_y = pred_points[:,1].tolist()
-        print(len(pred_x))
-        print(len(pred_y))
         # plot green points for gt_keypoints
-        plt.scatter(x=gt_x, y=gt_y, c='g', s=10)
+        ax.scatter(x=gt_x, y=gt_y, c='g', s=10)
         # plot blue points for pred_keypoints
-        plt.scatter(x=pred_x, y=pred_y, c='r', s=10)
+        ax.scatter(x=pred_x, y=pred_y, c='r', s=10)
+        # plot bboxes
+        gt_x1 = gt_bbox[0].item()
+        gt_y1 = gt_bbox[1].item()
+        gt_x2 = gt_bbox[2].item()
+        gt_y2 = gt_bbox[3].item()
+        pred_x1 = pred_bbox[0].item()
+        pred_y1 = pred_bbox[1].item()
+        pred_x2 = pred_bbox[2].item()
+        pred_y2 = pred_bbox[3].item()
+        # plot green rects for gt objects
+        gt_rect = patches.Rectangle((gt_x1, gt_y1), (gt_x2 - gt_x1), (gt_y2 - gt_y1), linewidth=1, edgecolor='g', facecolor='none')
+        ax.add_patch(gt_rect)
+        # plot red rects for pred objects
+        pred_rect = patches.Rectangle((pred_x1, pred_y1), (pred_x2 - pred_x1), (pred_y2 - pred_y1), linewidth=1, edgecolor='r', facecolor='none')
+        ax.add_patch(pred_rect)
     plt.show()
-    exit()
-
-def visualize_classifications(image, gt_bboxes, pred_bboxes, classifications):
-    pass
+    plt.close()
 
 def generate_labels(pred_tensor, gt_tensor, pred_min_bounds, pred_max_bounds, gt_min_bounds, gt_max_bounds):
     matched_gt_tensor = pred_tensor.clone()

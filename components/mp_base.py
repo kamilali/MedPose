@@ -82,7 +82,7 @@ class MedPoseBase(nn.Module):
         '''
         visualize region props (default: no)
         '''
-        #self._visualize_region_props(images, region_props)
+        # self._visualize_region_props(images, region_props)
         cf_region_features = self._extract_roi(feature_maps, images, region_props)
         cf_region_features = cf_region_features.view(batch_size, self.num_rpn_props, 
                 cf_region_features.shape[1], cf_region_features.shape[2], cf_region_features.shape[3])
@@ -108,4 +108,4 @@ class MedPoseBase(nn.Module):
                 rect = patches.Rectangle((x1, y1), (x2 - x1), (y2 - y1), linewidth=1,edgecolor='r',facecolor='none')
                 ax.add_patch(rect)
         plt.show()
-        plt.cla()
+        plt.close()
