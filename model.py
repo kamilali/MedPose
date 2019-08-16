@@ -49,6 +49,7 @@ class MedPose(nn.Module):
         x = []
         pose_detections = []
         pose_classifications = []
+        region_props = []
         initial_frame = True
 
         for frame_batch in frame_batches:
@@ -63,7 +64,8 @@ class MedPose(nn.Module):
             '''
             #start_time = time.time() 
             with torch.no_grad():
-                feature_maps, cf_region_features = self.base.extract_base_features(base_in)
+                feature_maps, cf_region_features, frame_batch_region_props = self.base.extract_base_features(base_in)
+                region_props.append(frame_batch_region_props)
             #print(time.time() - start_time, "seconds for base")
             #start_time = time.time()
             
@@ -85,4 +87,4 @@ class MedPose(nn.Module):
 
             #torch.cuda.empty_cache()
 
-        return pose_detections, pose_classifications
+        return pose_detections, pose_classifications, region_props

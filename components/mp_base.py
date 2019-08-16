@@ -82,12 +82,12 @@ class MedPoseBase(nn.Module):
         '''
         visualize region props (default: no)
         '''
-        # self._visualize_region_props(images, region_props)
+        #self._visualize_region_props(images, region_props)
         cf_region_features = self._extract_roi(feature_maps, images, region_props)
         cf_region_features = cf_region_features.view(batch_size, self.num_rpn_props, 
                 cf_region_features.shape[1], cf_region_features.shape[2], cf_region_features.shape[3])
         frame_feature_maps = torch.stack(frame_feature_maps, dim=1)
-        return frame_feature_maps, cf_region_features
+        return frame_feature_maps, cf_region_features, region_props
 
     def _visualize_region_props(self, images, region_props):
         '''
