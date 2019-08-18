@@ -7,7 +7,7 @@ class MedPoseEncoder(nn.Module):
 
     def __init__(self, num_enc_layers=3, num_att_heads=4, num_lrnn_layers=3, 
             model_dim=256, lrnn_hidden_dim=256, ff_hidden_dim=1024, 
-            roi_map_dim=7, lrnn_window_size=3, enc_history=[], gpus=None, device=None):
+            roi_map_dim=7, lrnn_window_size=3, enc_history=[], num_keypoints=17, gpus=None, device=None):
         super(MedPoseEncoder, self).__init__()
         '''
         store number of encoder layers and a dictionary containing
@@ -80,6 +80,26 @@ class MedPoseEncoder(nn.Module):
 
             ff_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
             self.ff_layer_norms.append(ff_layer_norm)
+        '''
+        fully connected networks for classification (pose detectable
+        or not) and regression (regressing from final decoder output
+        to joint coordinates per region)
+        '''
+        self.pose_cl = nn.Sequential(
+                    nn.Linear(model_dim, 64),
+                    nn.ReLU(),
+                    nn.Dropout(0.1),
+                    nn.Linear(64, 32),
+                    nn.ReLU(),
+                    nn.Dropout(0.1),
+                    nn.Linear(32, 2)
+                )
+        self.pose_regress = nn.Sequential(
+                    nn.Linear(model_dim, 64),
+                    nn.ReLU(),
+                    nn.Dropout(0.1),
+                    nn.Linear(64, num_keypoints * 2)
+                )
     
     def forward(self, feature_maps, cf_region_features, initial_frame=True):
         '''
@@ -179,5 +199,14 @@ class MedPoseEncoder(nn.Module):
                     curr_enc_hist.set_history(enc_layer + 1, curr_enc_hist.get_history(enc_layer + 1)[1:])
                 #curr_enc_hist.append_history(enc_layer + 1, enc_out.to(curr_enc_hist.get_history_device(enc_layer + 1)))
                 curr_enc_hist.append_history(enc_layer + 1, enc_out)
+        '''
+        pass output of last decoder layer to fully connected network for
+        pose estimation
+        '''
+        curr_poses_classes = self.pose_cl(enc_out)
+        #curr_poses_classes = data_parallel(self.pose_cl, dec_out, self.gpus, self.device)
+        curr_poses = self.pose_regress(enc_out)
+        #curr_poses = data_parallel(self.pose_regress, dec_out, self.gpus, self.device)
 
-        return enc_out
+
+        return curr_poses, curr_poses_classes

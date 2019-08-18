@@ -27,14 +27,6 @@ class MedPose(nn.Module):
         encoder_history = [MedPoseHistory() for i in gpus[1:]]
         self.encoder = MedPoseEncoder(num_enc_layers=stack_layers, enc_history=encoder_history, lrnn_window_size=window_size, gpus=gpus[1:], device=device)
         self.window_size = window_size
-        '''
-        initialize the MedPose decoder architecture with
-        default parameters (decoder attends to local structures
-        from previous pose estimations and uses encoder outputs
-        as queries for subsequent pose detections)
-        '''
-        decoder_history = [MedPoseHistory() for i in gpus[1:]]
-        self.decoder = MedPoseDecoder(num_dec_layers=stack_layers, dec_history=decoder_history, lrnn_window_size=window_size, gpus=gpus[1:], device=device)
     
     def forward(self, x, pose_detections=[], initial_frame=True):
         '''
@@ -69,15 +61,9 @@ class MedPose(nn.Module):
             #print(time.time() - start_time, "seconds for base")
             #start_time = time.time()
             
-            enc_out = self.encoder(feature_maps, cf_region_features, initial_frame)
+            curr_pose_estimation, curr_pose_classes = self.encoder(feature_maps, cf_region_features, initial_frame)
             #print(time.time() - start_time, "seconds for encoder")
             #torch.cuda.empty_cache()
-            
-            if len(pose_detections) == 0:
-                curr_pose_estimation, curr_pose_classes = self.decoder(enc_out, None, initial_frame)
-            else:
-                curr_pose_estimation, curr_pose_classes = self.decoder(enc_out, 
-                        torch.stack(pose_detections, dim=1), initial_frame)
             
             pose_detections.append(curr_pose_estimation)
             pose_detections = pose_detections[-self.window_size:]
