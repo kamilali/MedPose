@@ -37,13 +37,14 @@ def train(args):
     model = MedPose(window_size=window_size, num_keypoints=num_keypoints, num_rpn_props=300, stack_layers=args.stack_layers, device=device, gpus=DEVICES)
     model.base.to(DEVICES[0])
     model.encoder.to(DEVICES[1])
-    model.decoder.to(DEVICES[1])
+    #model.decoder.to(DEVICES[1])
 
-    optimized_params = list(model.encoder.parameters()) + list(model.decoder.parameters())
+    #optimized_params = list(model.encoder.parameters()) + list(model.decoder.parameters())
+    optimized_params = list(model.encoder.parameters())
     optimizer = torch.optim.Adam(optimized_params, lr=args.lr)
     
     model.encoder = torch.nn.DataParallel(model.encoder, device_ids=DEVICES[1:])
-    model.decoder = torch.nn.DataParallel(model.decoder, device_ids=DEVICES[1:])
+    #model.decoder = torch.nn.DataParallel(model.decoder, device_ids=DEVICES[1:])
     
     
     # load checkpoint if exists
