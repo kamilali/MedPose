@@ -1,5 +1,6 @@
 import torch.nn as nn
 import torch
+from sklearn.decomposition import PCA
 from math import sqrt
 
 class MedPoseAttention(nn.Module):
@@ -29,7 +30,22 @@ class MedPoseAttention(nn.Module):
         '''
         softmax layer for attention computation
         '''
-        self.softmax = nn.Softmax(dim=1)
+        self.softmax = nn.Softmax(dim=2)
+    
+    def _visualize_pca(self, vec):
+        pca = PCA(n_components=3)
+        for i in range(vec.shape[0]):
+            print(vec[i].shape)
+            pca_results = pca.fit_transform(vec[i].detach().cpu().numpy())
+            print(pca_results.shape)
+            #df['pca-one'] = pca_results[:,0]
+            #df['pca-two'] = pca_results[:,1]
+            #df['pca-three'] = pca_results[:,2]
+            #print(pca_results)
+            print('Explained variation per principal component: {}'.format(pca.explained_variance_ratio_))
+
+    def _visualize_attention(self):
+        pass
 
     def forward(self, queries, context):
         '''

@@ -37,15 +37,18 @@ def train(args):
     model = MedPose(window_size=window_size, num_keypoints=num_keypoints, num_rpn_props=300, stack_layers=args.stack_layers, device=device, gpus=DEVICES)
     model.base.to(DEVICES[0])
     model.encoder.to(DEVICES[1])
+    model.pose_cl.to(DEVICES[1])
+    model.pose_regress.to(DEVICES[1])
     #model.decoder.to(DEVICES[1])
 
     #optimized_params = list(model.encoder.parameters()) + list(model.decoder.parameters())
-    optimized_params = list(model.encoder.parameters())
+    optimized_params = list(model.encoder.parameters()) + list(model.pose_cl.parameters()) + list(model.pose_regress.parameters())
     optimizer = torch.optim.Adam(optimized_params, lr=args.lr)
     
     model.encoder = torch.nn.DataParallel(model.encoder, device_ids=DEVICES[1:])
+    model.pose_cl = torch.nn.DataParallel(model.pose_cl, device_ids=DEVICES[1:])
+    model.pose_regress = torch.nn.DataParallel(model.pose_regress, device_ids=DEVICES[1:])
     #model.decoder = torch.nn.DataParallel(model.decoder, device_ids=DEVICES[1:])
-    
     
     # load checkpoint if exists
     model, optimizer, start_epoch = load_checkpoint(model, optimizer, args.checkpoint)
@@ -143,7 +146,7 @@ def compute_ap(pred_tensor, gt_tensor, visibility_tensor, scales, threshold, run
         gt_keypoints = gt_keypoints[(visibility_tensor[object_idx] > 0).nonzero().squeeze(dim=1)]
         d = torch.sqrt(torch.sum(torch.pow((pred_keypoints - gt_keypoints), 2), dim=1))
         s = scales[object_idx]
-        k = 1 * (d / float(s)) # 2 standard deviations fall off
+        k = 2 * (d / float(s)) # 2 standard deviations fall off
         oks = torch.sum(torch.exp(torch.neg(torch.pow(d, 2)) / (2 * (s ** 2) * (k ** 2)))) / labeled_keypoints.float()
         object_oks_scores[object_idx] = oks
     # compute mean average precision of oks scores (similar to evaluation server)
