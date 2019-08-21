@@ -59,20 +59,22 @@ class MedPoseAttention(nn.Module):
         attention computation based on Q, K, V - linear projections 
         of inputs
         '''
+        #att_weights = self.softmax(torch.div(torch.matmul(q, torch.transpose(k, 1, 2)), sqrt(self.model_dim)))
+        residual_connection = q
         att_weights = self.softmax(torch.div(torch.matmul(q, torch.transpose(k, 1, 2)), sqrt(self.model_dim)))
         multi_head_att_out = torch.matmul(att_weights, v)
-        residual_connection = q
 
         for idx in range(1, self.num_att_heads):
             q = self.query_mappers[idx](queries)
             k = self.key_mappers[idx](context)
             v = self.value_mappers[idx](context)
 
+            #torch.div(torch.matmul(q, torch.transpose(k, 1, 2)), sqrt(self.model_dim)))
+            residual_connection = torch.cat([residual_connection, q], dim=2)
             att_weights = self.softmax(
                     torch.div(torch.matmul(q, torch.transpose(k, 1, 2)), sqrt(self.model_dim)))
-            multi_head_att_out = torch.cat([multi_head_att_out, torch.matmul(att_weights, v)], dim=2)
-            residual_connection = torch.cat([residual_connection, q], dim=2)
-        
+            multi_head_att_out = torch.cat([multi_head_att_out, torch.matmul(att_weights, v)], dim=-1)
+
         return self.multi_head_att_mapper(multi_head_att_out), residual_connection
 
 class MedPoseConvLSTM(nn.Module):

@@ -54,7 +54,7 @@ def train(args):
     model, optimizer, start_epoch = load_checkpoint(model, optimizer, args.checkpoint)
 
     estimation_criterion = torch.nn.MSELoss()
-    classification_criterion = torch.nn.CrossEntropyLoss()
+    #classification_criterion = torch.nn.CrossEntropyLoss()
 
     print("[III] Training MedPose...")
     print("Number of trainable model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad))
@@ -91,35 +91,34 @@ def train(args):
                     '''
                     keypoint_preds, classification_labels = refine_output_and_gt_labels(region_props, bboxes, pose_estimations, keypoints)
                     estimation_total_loss += estimation_criterion(keypoint_preds, keypoints)
-                    classification_total_loss += classification_criterion(classification, classification_labels)
+                    #classification_total_loss += classification_criterion(classification, classification_labels)
                     # compute average precision 
                     threshold = 0.75
                     ap, _ = compute_ap(keypoint_preds, keypoints, visibility_labels, scales, threshold, running_counts)
                     # classification accuracy (but unbalanced... way more 0s than 1s)
-                    pred_labels = torch.max(classification, dim=1)[1]
-                    classification_acc = torch.sum(pred_labels == classification_labels).item() / float(classification.shape[0])
+                    #pred_labels = torch.max(classification, dim=1)[1]
+                    #classification_acc = torch.sum(pred_labels == classification_labels).item() / float(classification.shape[0])
                     # classification accuracy of gt (balanced)
-                    masked_class_labels = classification_labels.clone()
-                    masked_class_labels[(pred_labels == 0).nonzero()] = 1
-                    gt_acc = torch.sum(pred_labels == masked_class_labels).item() / float(keypoints.shape[0])
-                    classification_accs.append(classification_acc)
-                    gt_accs.append(gt_acc)
+                    # masked_class_labels = classification_labels.clone()
+                    # masked_class_labels[(pred_labels == 0).nonzero()] = 1
+                    # gt_acc = torch.sum(pred_labels == masked_class_labels).item() / float(keypoints.shape[0])
+                    # classification_accs.append(classification_acc)
+                    # gt_accs.append(gt_acc)
                     # visualizations
-                    gt_indices = (classification_labels == 1).nonzero()
-                    pred_indices = (pred_labels == 1).nonzero()
+                    # gt_indices = (classification_labels == 1).nonzero()
+                    # pred_indices = (pred_labels == 1).nonzero()
                     #visualize_predictions_and_gts(batch_videos[batch_idx][seq_idx], keypoints, keypoint_preds, visibility_labels, bboxes, region_props[gt_indices], region_props)
                     #visualize_predictions_and_gts(batch_videos[batch_idx][seq_idx], keypoints, keypoint_preds, visibility_labels, bboxes, region_props[pred_indices])
                     #visualize_predictions_and_gts(batch_videos[batch_idx][seq_idx], keypoints, keypoint_preds, visibility_labels, region_props[gt_indices], region_props[pred_indices])
             #print("labels + loss computation:", time.time() - module_start_time, "seconds")
             # backpropogate gradients from loss functions and update weights
             optimizer.zero_grad()
-            total_loss = estimation_total_loss + classification_total_loss
-            total_loss.backward()
+            estimation_total_loss.backward()
             optimizer.step()
             # write out current epoch and losses and delete memory consuming variables
-            train_classification_acc = (sum(classification_accs) / float(len(classification_accs))) * 100
-            train_gt_acc = (sum(gt_accs) / float(len(gt_accs))) * 100
-            print("Epoch: {}/{}\tLoss: {:.4f}, {:.4f}\tTrain Classification Accuracy: {:.2f}, {:.2f}\tAP@{}: {:.2f}".format(epoch, args.epochs, estimation_total_loss, classification_total_loss, train_classification_acc, train_gt_acc, threshold, ap), flush=True)
+            #train_classification_acc = (sum(classification_accs) / float(len(classification_accs))) * 100
+            #train_gt_acc = (sum(gt_accs) / float(len(gt_accs))) * 100
+            print("Epoch: {}/{}\tLoss: {:.4f}, {:.4f}\tAP@{}: {:.2f}".format(epoch, args.epochs, estimation_total_loss, classification_total_loss, threshold, ap), flush=True)
             #print(time.time() - module_start_time, "seconds")
         print("Time to complete epoch: {} seconds".format(time.time() - start_time))
         # save state every epoch in case of preemption

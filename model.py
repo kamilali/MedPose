@@ -82,7 +82,7 @@ class MedPose(nn.Module):
                 region_props.append(frame_batch_region_props)
             #print(time.time() - start_time, "seconds for base")
             #start_time = time.time()
-            enc_out = self.encoder(feature_maps, cf_region_features, initial_frame)
+            enc_out = self.encoder(feature_maps, cf_region_features, initial_frame, True)
             #print(time.time() - start_time, "seconds for encoder")
             #torch.cuda.empty_cache()
             '''

@@ -81,7 +81,7 @@ class MedPoseEncoder(nn.Module):
             ff_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
             self.ff_layer_norms.append(ff_layer_norm)
     
-    def forward(self, feature_maps, cf_region_features, initial_frame=True):
+    def forward(self, feature_maps, cf_region_features, initial_frame=True, local_rnn=False):
         '''
         apply LocalRNN to small local window to capture local
         structures and only keep the last hidden state representation
@@ -105,41 +105,45 @@ class MedPoseEncoder(nn.Module):
             if enc_layer != 0:
                 enc_in = torch.stack(curr_enc_hist.get_history(enc_layer), dim=1)
                 enc_in = enc_in.permute(0, 1, 3, 2)
-            (context, _), residual_connection = self.local_rnns[enc_layer](enc_in)
-            #(context, _), residual_connection = data_parallel(self.local_rnns[enc_layer], enc_in, self.gpus, self.device)
-            #torch.cuda.empty_cache()
-            '''
-            layer normalization + residual connection (comes from output
-            of conv layers prior to forward pass through lstm)
-            '''
-            context = self.lrnn_layer_norms[enc_layer](context + residual_connection)
-            #context = data_parallel(self.lrnn_layer_norms[enc_layer], context + residual_connection, self.gpus, self.device)
-            '''
-            use the last hidden layer as the hidden representation
-            '''
-            context = context[:, context.shape[1] - 1]
-            context = context.unsqueeze(dim=1)
-            '''
-            add hidden rnn output to history for attending over past 
-            local structures
-            '''
-            # if self.hr_hist_device[enc_layer] is None:
-            #     self.hr_hist_device[enc_layer] = context.get_device()
-            #     self.hidden_rnn_hist[enc_layer] = context
-            # else:
-            #     self.hidden_rnn_hist[enc_layer] = torch.cat((self.hidden_rnn_hist[enc_layer], context.to(self.hr_hist_device[enc_layer])), dim=1)
-            if curr_enc_hist.get_lrnn_history(enc_layer) is None:
-                #curr_enc_hist.set_lrnn_history_device(enc_layer, context.get_device())
-                curr_enc_hist.set_lrnn_history(enc_layer, context)
-            else:
-                #curr_enc_hist.set_lrnn_history(enc_layer, torch.cat((curr_enc_hist.get_lrnn_history(enc_layer), context.to(curr_enc_hist.get_lrnn_history_device(enc_layer))), dim=1))
-                curr_enc_hist.set_lrnn_history(enc_layer, torch.cat((curr_enc_hist.get_lrnn_history(enc_layer), context), dim=1))
+            if local_rnn:
+                (context, _), residual_connection = self.local_rnns[enc_layer](enc_in)
+                #(context, _), residual_connection = data_parallel(self.local_rnns[enc_layer], enc_in, self.gpus, self.device)
+                #torch.cuda.empty_cache()
+                '''
+                layer normalization + residual connection (comes from output
+                of conv layers prior to forward pass through lstm)
+                '''
+                context = self.lrnn_layer_norms[enc_layer](context + residual_connection)
+                #context = data_parallel(self.lrnn_layer_norms[enc_layer], context + residual_connection, self.gpus, self.device)
+                '''
+                use the last hidden layer as the hidden representation
+                '''
+                context = context[:, context.shape[1] - 1]
+                context = context.unsqueeze(dim=1)
+                '''
+                add hidden rnn output to history for attending over past 
+                local structures
+                '''
+                # if self.hr_hist_device[enc_layer] is None:
+                #     self.hr_hist_device[enc_layer] = context.get_device()
+                #     self.hidden_rnn_hist[enc_layer] = context
+                # else:
+                #     self.hidden_rnn_hist[enc_layer] = torch.cat((self.hidden_rnn_hist[enc_layer], context.to(self.hr_hist_device[enc_layer])), dim=1)
+                if curr_enc_hist.get_lrnn_history(enc_layer) is None:
+                    #curr_enc_hist.set_lrnn_history_device(enc_layer, context.get_device())
+                    curr_enc_hist.set_lrnn_history(enc_layer, context)
+                else:
+                    #curr_enc_hist.set_lrnn_history(enc_layer, torch.cat((curr_enc_hist.get_lrnn_history(enc_layer), context.to(curr_enc_hist.get_lrnn_history_device(enc_layer))), dim=1))
+                    curr_enc_hist.set_lrnn_history(enc_layer, torch.cat((curr_enc_hist.get_lrnn_history(enc_layer), context), dim=1))
             '''
             formulate query and past_context for attention
             mechanism
             '''
             query = cf_region_features
-            context = curr_enc_hist.get_lrnn_history(enc_layer)
+            if local_rnn:
+                context = curr_enc_hist.get_lrnn_history(enc_layer)
+            else:
+                context = enc_in
             '''
             attend to local structures using region features as
             queries and outputs of LocalRNNs as context

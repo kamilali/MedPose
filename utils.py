@@ -105,14 +105,38 @@ class PoseTrackDataset(Dataset):
         return len(self.videos)
 
     def __getitem__(self, idx):
-        video_keypoints = self.video_keypoints[idx]
-        video_scales = self.video_scales[idx]
-        video_bboxes = self.video_bboxes[idx]
+        orig_video_keypoints = self.video_keypoints[idx]
+        orig_video_scales = self.video_scales[idx]
+        orig_video_bboxes = self.video_bboxes[idx]
         video = self.videos[idx]
         
         video_frames = []
-        for frame in video:
-            video_frames.append(self.transform(Image.open(frame)).to(self.device))
+        video_keypoints = []
+        video_scales = []
+        video_bboxes = []
+        base_width = 720
+        for frame, kps, scales, bboxes in zip(video, orig_video_keypoints, orig_video_scales, orig_video_bboxes):
+            resized_image = Image.open(frame)
+            orig_width = resized_image.size[0]
+            orig_height = resized_image.size[1]
+            wp = (base_width / float(orig_width))
+            im_height = int((float(orig_height) * float(wp)))
+            hp = (im_height / float(orig_height))
+            resized_image = resized_image.resize((base_width, im_height), Image.ANTIALIAS)
+            video_frame = self.transform(resized_image).to(self.device)
+            kps[:,:,0] = wp * kps[:,:,0]
+            kps[:,:,1] = hp * kps[:,:,1]
+            video_keypoints.append(kps)
+            curr_scales = []
+            for i in range(len(scales)):
+                curr_scales.append(math.sqrt(hp) * math.sqrt(wp) * scales[i])
+                bboxes[i][0] = wp * bboxes[i][0]
+                bboxes[i][1] = hp * bboxes[i][1]
+                bboxes[i][2] = wp * bboxes[i][2]
+                bboxes[i][3] = hp * bboxes[i][3]
+            video_bboxes.append(bboxes)
+            video_scales.append(curr_scales)
+            video_frames.append(video_frame)
         
         return video_frames, video_keypoints, video_scales, video_bboxes
 
