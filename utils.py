@@ -114,7 +114,7 @@ class PoseTrackDataset(Dataset):
         video_keypoints = []
         video_scales = []
         video_bboxes = []
-        base_width = 720
+        base_width = 736
         for frame, kps, scales, bboxes in zip(video, orig_video_keypoints, orig_video_scales, orig_video_bboxes):
             resized_image = Image.open(frame)
             orig_width = resized_image.size[0]

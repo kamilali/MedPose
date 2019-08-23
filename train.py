@@ -105,8 +105,8 @@ def train(args):
                     # classification_accs.append(classification_acc)
                     # gt_accs.append(gt_acc)
                     # visualizations
-                    # gt_indices = (classification_labels == 1).nonzero()
-                    # pred_indices = (pred_labels == 1).nonzero()
+                    #gt_indices = (classification_labels == 1).nonzero()
+                    #pred_indices = (pred_labels == 1).nonzero()
                     #visualize_predictions_and_gts(batch_videos[batch_idx][seq_idx], keypoints, keypoint_preds, visibility_labels, bboxes, region_props[gt_indices], region_props)
                     #visualize_predictions_and_gts(batch_videos[batch_idx][seq_idx], keypoints, keypoint_preds, visibility_labels, bboxes, region_props[pred_indices])
                     #visualize_predictions_and_gts(batch_videos[batch_idx][seq_idx], keypoints, keypoint_preds, visibility_labels, region_props[gt_indices], region_props[pred_indices])

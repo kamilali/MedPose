@@ -18,7 +18,8 @@ class MedPoseBase(nn.Module):
         keypoint_rcnn = torchvision.models.detection.keypointrcnn_resnet50_fpn(
                 pretrained=True,
                 num_keypoints=num_keypoints,
-                rpn_post_nms_top_n_test=num_rpn_props)
+                rpn_post_nms_top_n_test=num_rpn_props,
+                min_size=736, max_size=736)
         '''
         truncate base cnn model so that instead of regressing to
         keypoints and classification, a feature map from an earlier
