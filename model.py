@@ -35,7 +35,7 @@ class MedPose(nn.Module):
         to joint coordinates per region)
         '''
         self.pose_cl = nn.Sequential(
-                    nn.Linear(model_dim, 64),
+                    nn.Linear(model_dim * 7 * 7, 64),
                     nn.ReLU(),
                     nn.Dropout(0.1),
                     nn.Linear(64, 32),
@@ -89,7 +89,8 @@ class MedPose(nn.Module):
             pass output of last decoder layer to fully connected network for
             pose estimation
             '''
-            curr_pose_classes = self.pose_cl(enc_out)
+            cl_in = cf_region_features.view(cf_region_features.shape[0], cf_region_features.shape[1], -1)
+            curr_pose_classes = self.pose_cl(cl_in)
             curr_pose_estimation = self.pose_regress(enc_out)
             
             pose_detections.append(curr_pose_estimation)

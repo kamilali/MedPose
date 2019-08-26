@@ -54,7 +54,7 @@ def train(args):
     model, optimizer, start_epoch = load_checkpoint(model, optimizer, args.checkpoint)
 
     estimation_criterion = torch.nn.MSELoss()
-    #classification_criterion = torch.nn.CrossEntropyLoss()
+    classification_criterion = torch.nn.CrossEntropyLoss()
 
     print("[III] Training MedPose...")
     print("Number of trainable model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad))
@@ -71,7 +71,7 @@ def train(args):
             #print("model forward pass:", time.time() - module_start_time, "seconds")
             #module_start_time = time.time()
             estimation_total_loss = 0
-            classification_total_loss = 0
+            #classification_total_loss = 0
             classification_accs = []
             gt_accs = []
             for seq_idx in range(len(estimations)):
@@ -114,11 +114,14 @@ def train(args):
             # backpropogate gradients from loss functions and update weights
             optimizer.zero_grad()
             estimation_total_loss.backward()
+            #total_loss = estimation_total_loss + 100 * classification_total_loss
+            #total_loss.backward()
             optimizer.step()
             # write out current epoch and losses and delete memory consuming variables
             #train_classification_acc = (sum(classification_accs) / float(len(classification_accs))) * 100
             #train_gt_acc = (sum(gt_accs) / float(len(gt_accs))) * 100
-            print("Epoch: {}/{}\tLoss: {:.4f}, {:.4f}\tAP@{}: {:.2f}".format(epoch, args.epochs, estimation_total_loss, classification_total_loss, threshold, ap), flush=True)
+            #print("Epoch: {}/{}\tLoss: {:.4f}, {:.4f}\tAP@{}: {:.2f}".format(epoch, args.epochs, estimation_total_loss, classification_total_loss, threshold, ap), flush=True)
+            print("Epoch: {}/{}\tLoss: {:.4f}\tAP@{}: {:.2f}".format(epoch, args.epochs, estimation_total_loss, threshold, ap), flush=True)
             #print(time.time() - module_start_time, "seconds")
         print("Time to complete epoch: {} seconds".format(time.time() - start_time))
         # save state every epoch in case of preemption
@@ -146,7 +149,7 @@ def compute_ap(pred_tensor, gt_tensor, visibility_tensor, scales, threshold, run
         d = torch.sqrt(torch.sum(torch.pow((pred_keypoints - gt_keypoints), 2), dim=1))
         s = scales[object_idx]
         k = 2 * (d / float(s)) # 2 standard deviations fall off
-        oks = torch.sum(torch.exp(torch.neg(torch.pow(d, 2)) / (2 * (s ** 2) * (k ** 2)))) / labeled_keypoints.float()
+        oks = torch.sum(torch.exp(torch.neg(torch.pow(d, 2)) / (2 * (k ** 2)))) / labeled_keypoints.float()
         object_oks_scores[object_idx] = oks
     # compute mean average precision of oks scores (similar to evaluation server)
     true_pos = torch.sum(object_oks_scores > threshold)
@@ -178,7 +181,7 @@ def _visualize_region_props(image, region_props):
 def visualize_predictions_and_gts(image, gt_keypoints, pred_keypoints, visibility_labels, gt_boxes, pred_boxes, region_props):
     # plot image
     image = image.permute(1, 2, 0).cpu().numpy()
-    _visualize_region_props(image, region_props)
+    #_visualize_region_props(image, region_props)
     fig, ax = plt.subplots(1)
     ax.imshow(image)
     for person_idx in range(gt_keypoints.shape[0]):
