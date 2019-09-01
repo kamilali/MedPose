@@ -1,5 +1,8 @@
-import torchvision
 import torch
+import torchvision
+from torchvision.ops import MultiScaleRoIAlign
+from torchvision.models.detection.keypoint_rcnn import KeypointRCNNHeads, KeypointRCNNPredictor
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from model import MedPose
 from utils import load_train
 import numpy as np
@@ -25,11 +28,142 @@ def load_checkpoint(model, optimizer, ckpt_file):
         optimizer.load_state_dict(checkpoint['optimizer'])
     return model, optimizer, start_epoch
 
+# training baseline for comparison purposes
+def train_baseline(args):
+    DEVICES = [i for i in range(args.gpus)]
+    batch_size = args.batch_per_gpu * len(DEVICES)
+    num_keypoints = 17
+
+    train_dataloader, valid_dataloader = load_train(batch_size=batch_size, device=device)
+   
+    # custom keypoint components
+    # keypoint_layers = tuple(256 for _ in range(8))
+    # keypoint_head = KeypointRCNNHeads(256, keypoint_layers)
+    # keypoint_roi_pool = MultiScaleRoIAlign(
+    #             featmap_names=[0, 1, 2, 3, 4],
+    #             output_size=7,
+    #             sampling_ratio=2)
+    # keypoint_dim_reduced = 256
+    # keypoint_predictor = KeypointRCNNPredictor(keypoint_dim_reduced, num_keypoints)
+
+    # custom box predictor components
+    # representation_size = 1024
+    # box_predictor = FastRCNNPredictor(
+    #             representation_size,
+    #             num_classes=2)
+
+    model = torchvision.models.detection.keypointrcnn_resnet50_fpn(
+            pretrained=True,
+            pretrained_backbone=True,
+            num_keypoints=num_keypoints,
+            rpn_post_nms_top_n_test=300,
+            min_size=480,
+            max_size=480).to(DEVICES[0])
+
+    for pstr, param in model.named_parameters():
+        if 'backbone' in pstr or 'rpn' in pstr or 'box' in pstr:
+            param.requires_grad = False
+        else:
+            torch.nn.init.zeros_(param)
+            param.requires_grad = True
+        #print(pstr, param.requires_grad)
+    
+    # model = torchvision.models.detection.keypointrcnn_resnet50_fpn(
+    #         pretrained=False,
+    #         pretrained_backbone=False,
+    #         num_keypoints=num_keypoints,
+    #         rpn_post_nms_top_n_test=300,
+    #         min_size=480,
+    #         max_size=480,
+    #         num_classes=None,
+    #         keypoint_roi_pool=keypoint_roi_pool,
+    #         keypoint_head=keypoint_head,
+    #         keypoint_predictor=keypoint_predictor,
+    #         box_predictor=box_predictor).to(DEVICES[0])
+
+    optimizer = torch.optim.Adam([param for param in model.parameters() if param.requires_grad], lr=args.lr)
+
+    #model = torch.nn.DataParallel(model, device_ids=DEVICES)
+    
+    checkpoint_file = "baseline_checkpoint.pth"
+    model, optimizer, start_epoch = load_checkpoint(model, optimizer, checkpoint_file)
+    
+    print("[III] Training baseline...")
+    print("Number of trainable model parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad))
+
+    # test visualizations
+    test = False
+    if test:
+        model.eval()
+    
+    for epoch in range(start_epoch, args.epochs + 1):
+        for train_idx, (batch_videos, batch_keypoints, batch_scales, batch_bboxes) in enumerate(train_dataloader):
+            for i, batch_video in enumerate(batch_videos):
+                batch_videos[i] = batch_video[0]
+            
+            # test visualizations
+            if test:
+                out = model(batch_videos)
+                for batch_idx in range(len(out)):
+                    print(out[batch_idx])
+                    pred_boxes = out[batch_idx]["boxes"]
+                    pred_keypoints = out[batch_idx]["keypoints"]
+                    bboxes = batch_bboxes[batch_idx][0]
+                    keypoints = batch_keypoints[0][batch_idx].to(device)
+                    visibility_labels = keypoints[:,:,2]
+                    keypoints = keypoints[:,:,:2]
+                    print(len(pred_boxes))
+                    print(len(bboxes))
+                    print(pred_keypoints.shape)
+                    print(keypoints.shape)
+                    visualize_predictions_and_gts(batch_videos[batch_idx], keypoints, pred_keypoints, visibility_labels, bboxes, pred_boxes, None)
+                exit()
+            targets = [{"boxes": torch.stack(box[0], dim=0).cuda(), "keypoints": keypoints.cuda(), "labels": torch.ones(len(box[0])).cuda()} for box, keypoints in zip(batch_bboxes, batch_keypoints[0])]
+            out = model(batch_videos, targets)
+            total_loss = 0
+            for loss_key in out.keys():
+                print(out[loss_key])
+                if not torch.isnan(out[loss_key]):
+                    total_loss = total_loss + out[loss_key]
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+            
+            print("Epoch: {}/{}\tTotal Loss: {:.4f}".format(epoch, args.epochs, total_loss), flush=True)
+        # save state every epoch in case of preemption
+        state = {
+            'epoch': epoch + 1,
+            'state_dict': model.state_dict(),
+            'optimizer': optimizer.state_dict()
+        }
+        if os.path.isfile(checkpoint_file):
+            torch.save(state, checkpoint_file + "-temp")
+            os.rename(checkpoint_file + "-temp", checkpoint_file)
+        else:
+            torch.save(state, checkpoint_file)
+        if epoch != 0:
+            torch.save(model.state_dict(), "baseline_model_repository/model-{}{}".format(epoch, args.model_suffix))
+            
+            #for batch_idx in range(len(out)):
+            #    print(out[batch_idx])
+            #    pred_boxes = out[batch_idx]["boxes"]
+            #    pred_keypoints = out[batch_idx]["keypoints"]
+            #    bboxes = batch_bboxes[batch_idx][0]
+            #    keypoints = batch_keypoints[0][batch_idx].to(device)
+            #    visibility_labels = keypoints[:,:,2]
+            #    keypoints = keypoints[:,:,:2]
+            #    print(len(pred_boxes))
+            #    print(len(bboxes))
+            #    print(pred_keypoints.shape)
+            #    print(keypoints.shape)
+            #    visualize_predictions_and_gts(batch_videos[batch_idx], keypoints, pred_keypoints, visibility_labels, bboxes, pred_boxes, None)
+            #    exit()
+
 def train(args):
 
     DEVICES = [i for i in range(args.gpus)]
 
-    window_size = 5
+    window_size = 1
     batch_size = args.batch_per_gpu * (len(DEVICES) - 1)
     num_keypoints = 17
 
@@ -186,20 +320,27 @@ def visualize_predictions_and_gts(image, gt_keypoints, pred_keypoints, visibilit
     ax.imshow(image)
     for person_idx in range(gt_keypoints.shape[0]):
         gt_points = gt_keypoints[person_idx]
-        pred_points = pred_keypoints[person_idx]
+        if person_idx < pred_keypoints.shape[0]:
+            pred_points = pred_keypoints[person_idx]
+        else:
+            pred_points = None
         gt_bbox = torch.round(gt_boxes[person_idx])
         pred_bbox = None
-        if pred_boxes.shape[1] > 0:
+        vis = (visibility_labels[person_idx] > 0).nonzero().squeeze(dim=1)
+        gt_points = gt_points[vis]
+        if pred_points is not None and pred_boxes.shape[1] > 0:
             pred_bbox = torch.round(pred_boxes[person_idx].squeeze(dim=0))
         # plot keypoints
         gt_x = gt_points[:,0].tolist()
         gt_y = gt_points[:,1].tolist()
-        pred_x = pred_points[:,0].tolist()
-        pred_y = pred_points[:,1].tolist()
+        if pred_points is not None:
+            pred_x = pred_points[:,0].tolist()
+            pred_y = pred_points[:,1].tolist()
         # plot green points for gt_keypoints
         ax.scatter(x=gt_x, y=gt_y, c='g', s=10)
         # plot blue points for pred_keypoints
-        ax.scatter(x=pred_x, y=pred_y, c='r', s=10)
+        if pred_points is not None:
+            ax.scatter(x=pred_x, y=pred_y, c='r', s=10)
         # plot bboxes
         gt_x1 = gt_bbox[0].item()
         gt_y1 = gt_bbox[1].item()
@@ -272,9 +413,15 @@ if __name__ == '__main__':
     parser.add_argument("--batch_per_gpu", default=1, type=int)
     parser.add_argument("--lr", default=0.01, type=float)
     parser.add_argument("--stack_layers", default=4, type=int)
+    parser.add_argument("--use_baseline", action="store_true")
     args = parser.parse_args()
     # check if model repository exists otherwise create it
     if not os.path.exists("model_repository"):
         os.mkdir("model_repository")
-    train(args)
+    if not args.use_baseline:
+        train(args)
+    else:
+        if not os.path.exists("baseline_model_repository"):
+            os.mkdir("baseline_model_repository")
+        train_baseline(args)
 

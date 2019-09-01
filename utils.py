@@ -34,7 +34,7 @@ class PoseTrackDataset(Dataset):
         block_print()
         coco_instances = COCO(coco_dir)
         unblock_print()
-        annotations_list = [f for f in os.listdir(annotations_dir) if f.endswith(".json")]
+        annotations_list = [f for f in os.listdir(annotations_dir) if f.endswith(".json")][:-1]
         '''
         process all video annotations and store in frame batches (i.e. tensor
         of shape batch_size x image_height x image_width x image_channels)
@@ -63,7 +63,7 @@ class PoseTrackDataset(Dataset):
                 else:
                     posetrack_images.append(img)
 
-            posetrack_images = posetrack_images[0:10]
+            posetrack_images = posetrack_images[0:1]
 
             video_frames = []
             frame_keypoints = []
@@ -114,7 +114,7 @@ class PoseTrackDataset(Dataset):
         video_keypoints = []
         video_scales = []
         video_bboxes = []
-        base_width = 736
+        base_width = 480
         for frame, kps, scales, bboxes in zip(video, orig_video_keypoints, orig_video_scales, orig_video_bboxes):
             resized_image = Image.open(frame)
             orig_width = resized_image.size[0]
