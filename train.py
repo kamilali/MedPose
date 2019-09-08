@@ -161,13 +161,18 @@ def train_baseline(args):
 
 def train(args):
 
+    if not torch.cuda.is_available():
+        sys.exit("Need CUDA to train MedPose")
+
     DEVICES = [i for i in range(args.gpus)]
 
     window_size = 1
-    batch_size = args.batch_per_gpu * (len(DEVICES) - 1)
+    batch_size = args.batch_per_gpu * (len(DEVICES))
     num_keypoints = 17
 
+    # loading train posetrack dataset 
     train_dataloader, valid_dataloader = load_train(batch_size=batch_size, device=device)
+
     model = MedPose(window_size=window_size, num_keypoints=num_keypoints, num_rpn_props=300, stack_layers=args.stack_layers, device=device, gpus=DEVICES)
     model.base.to(DEVICES[0])
     model.encoder.to(DEVICES[1])

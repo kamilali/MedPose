@@ -1,6 +1,6 @@
 import torch.nn as nn
+import torch.nn.functional as F
 import torch
-from sklearn.decomposition import PCA
 from math import sqrt
 
 class MedPoseAttention(nn.Module):
@@ -32,21 +32,6 @@ class MedPoseAttention(nn.Module):
         '''
         self.softmax = nn.Softmax(dim=2)
     
-    def _visualize_pca(self, vec):
-        pca = PCA(n_components=3)
-        for i in range(vec.shape[0]):
-            print(vec[i].shape)
-            pca_results = pca.fit_transform(vec[i].detach().cpu().numpy())
-            print(pca_results.shape)
-            #df['pca-one'] = pca_results[:,0]
-            #df['pca-two'] = pca_results[:,1]
-            #df['pca-three'] = pca_results[:,2]
-            #print(pca_results)
-            print('Explained variation per principal component: {}'.format(pca.explained_variance_ratio_))
-
-    def _visualize_attention(self):
-        pass
-
     def forward(self, queries, context):
         '''
         map inputs to query, key, and value vectors
@@ -89,25 +74,23 @@ class MedPoseConvLSTM(nn.Module):
             '''
             self.conv2d = nn.Sequential(
                         nn.Conv2d(input_size, input_size // 2, kernel_size=3, padding=1, stride=2),
-                        nn.BatchNorm2d(
-                            input_size // 2, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                        nn.BatchNorm2d(input_size // 2),
                         nn.ReLU(),
                         nn.MaxPool2d(kernel_size=2),
                         nn.Conv2d(input_size // 2, input_size // 4, kernel_size=3, padding=1, stride=2),
-                        nn.BatchNorm2d(
-                            input_size // 4, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                        nn.BatchNorm2d(input_size // 4),
                         nn.ReLU(),
                         nn.MaxPool2d(kernel_size=2),
                         nn.Conv2d(input_size // 4, input_size // 2, kernel_size=3, padding=1, stride=2),
-                        nn.BatchNorm2d(
-                            input_size // 2, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                        nn.BatchNorm2d(input_size // 2),
                         nn.ReLU(),
                         nn.MaxPool2d(kernel_size=2),
-                        nn.Conv2d(input_size // 2, input_size, kernel_size=3, padding=1, stride=2),
-                        nn.BatchNorm2d(
-                            input_size, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                        nn.Conv2d(input_size // 2, input_size // 2, kernel_size=3, padding=1, stride=2),
+                        nn.BatchNorm2d(input_size // 2),
                         nn.ReLU(),
-                        nn.MaxPool2d(kernel_size=2)
+                        nn.Conv2d(input_size // 2, input_size, kernel_size=3, padding=1, stride=2),
+                        nn.BatchNorm2d(input_size),
+                        nn.ReLU()
                     )
 
         if conv1d_req:
@@ -118,36 +101,30 @@ class MedPoseConvLSTM(nn.Module):
             if decoder_first:
                 self.conv1d = nn.Sequential(
                             nn.Conv1d(input_size, input_size // 2, kernel_size=5, padding=1, stride=2),
-                            nn.BatchNorm1d(
-                                input_size // 2, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                            nn.BatchNorm1d(input_size // 2),
                             nn.ReLU(),
                             nn.MaxPool1d(kernel_size=2),
                             nn.Conv1d(input_size // 2, input_size // 4, kernel_size=5, padding=1, stride=1),
-                            nn.BatchNorm1d(
-                                input_size // 4, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                            nn.BatchNorm1d(input_size // 4),
                             nn.ReLU(),
                             nn.MaxPool1d(kernel_size=2),
                             nn.Conv1d(input_size // 4, input_size // 4, kernel_size=5, padding=0, stride=1),
-                            nn.BatchNorm1d(
-                                input_size // 4, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                            nn.BatchNorm1d(input_size // 4),
                             nn.ReLU()
                         )
             else:
 
                 self.conv1d = nn.Sequential(
                             nn.Conv1d(model_size, model_size // 2, kernel_size=5, padding=1, stride=2),
-                            nn.BatchNorm1d(
-                                model_size // 2, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                            nn.BatchNorm1d(model_size // 2),
                             nn.ReLU(),
                             nn.MaxPool1d(kernel_size=2),
                             nn.Conv1d(model_size // 2, model_size // 4, kernel_size=5, padding=1, stride=2),
-                            nn.BatchNorm1d(
-                                model_size // 4, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                            nn.BatchNorm1d(model_size // 4),
                             nn.ReLU(),
                             nn.MaxPool1d(kernel_size=2),
                             nn.Conv1d(model_size // 4, model_size // 8, kernel_size=5, padding=1, stride=2),
-                            nn.BatchNorm1d(
-                                model_size // 8, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True),
+                            nn.BatchNorm1d(model_size // 8),
                             nn.ReLU()
                         )
         self.conv2d_req = conv2d_req
@@ -162,8 +139,11 @@ class MedPoseConvLSTM(nn.Module):
                 input_size=model_size, hidden_size=hidden_size,
                 batch_first=True)
         self.batch_first = batch_first
+        self.model_dim = model_size
 
     def forward(self, x):
+        # fixing bug resulting from allocation for variables/tensors
+        x = x.contiguous()
         '''
         ensure that batch dimension is first (canonical format
         for consistency)
@@ -182,16 +162,31 @@ class MedPoseConvLSTM(nn.Module):
             c_in = x.view(batch_size * num_frames, c, h, w)
             c_out = self.conv2d(c_in)
             r_in = c_out.view(batch_size, num_frames, -1)
+            # ensure the input is of correct feature dim size
+            if r_in.shape[2] > self.model_dim:
+                r_in = F.max_pool1d(r_in, kernel_size=2)
         elif self.conv1d_req:
             batch_size, num_frames, c, l = x.shape
             c_in = x.view(batch_size * num_frames, c, l)
-            c_in = c_in.to(next(self.conv1d.parameters()).get_device())
+            #c_in = c_in.cuda(next(self.conv1d.parameters()).get_device())
             c_out = self.conv1d(c_in)
             r_in = c_out.view(batch_size, num_frames, -1)
         else:
             r_in = x
         self.lstm.flatten_parameters()
         return self.lstm(r_in), r_in
+
+class MedPoseLayerNorm(nn.Module):
+    def __init__(self, feature_dim, eps=1e-6):
+        super(MedPoseLayerNorm, self).__init__()
+        self.gamma = nn.Parameter(torch.ones(feature_dim))
+        self.beta = nn.Parameter(torch.zeros(feature_dim))
+        self.eps = eps
+
+    def forward(self, x):
+        mean = x.mean(-1, keepdim=True)
+        std = x.std(-1, keepdim=True)
+        return self.gamma * (x - mean) / (std + self.eps) + self.beta
 
 class MedPoseHistory:
     def __init__(self):

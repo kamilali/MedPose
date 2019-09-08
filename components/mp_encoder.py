@@ -1,12 +1,12 @@
 import torch.nn as nn
 import torch
-from .mp_layers import MedPoseAttention, MedPoseConvLSTM
+from .mp_layers import MedPoseAttention, MedPoseConvLSTM, MedPoseLayerNorm
 import time
 
 class MedPoseEncoder(nn.Module):
 
     def __init__(self, num_enc_layers=3, num_att_heads=4, num_lrnn_layers=3, 
-            model_dim=256, lrnn_hidden_dim=256, ff_hidden_dim=1024, 
+            model_dim=1088, lrnn_hidden_dim=1088, ff_hidden_dim=4096, 
             roi_map_dim=7, lrnn_window_size=3, enc_history=[], num_keypoints=17, gpus=None, device=None):
         super(MedPoseEncoder, self).__init__()
         '''
@@ -47,14 +47,17 @@ class MedPoseEncoder(nn.Module):
                     conv1d_req=(enc_layer != 0))
             self.local_rnns.append(local_rnn)
 
-            lrnn_layer_norm = nn.LayerNorm(lrnn_hidden_dim, eps=1e-05, elementwise_affine=True)
+            lrnn_layer_norm = MedPoseLayerNorm(lrnn_hidden_dim, eps=1e-05)
             self.lrnn_layer_norms.append(lrnn_layer_norm)
             '''
             Attention mechanism using region features and current context
             to obtain queries and outputs of LocalRNNs to obtain keys and
             values
             '''
-            query_dim = ((roi_map_dim ** 2) * model_dim)
+            if enc_layer == 0:
+                query_dim = ((roi_map_dim ** 2) * model_dim)
+            else:
+                query_dim = model_dim
             att = MedPoseAttention(
                     query_dim=query_dim,
                     key_dim=lrnn_hidden_dim, 
@@ -63,7 +66,7 @@ class MedPoseEncoder(nn.Module):
                     num_att_heads=num_att_heads)
             self.atts.append(att)
 
-            att_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
+            att_layer_norm = MedPoseLayerNorm(model_dim, eps=1e-05)
             self.att_layer_norms.append(att_layer_norm)
             '''
             feed-forward module to map output of attention layer to final
@@ -78,7 +81,7 @@ class MedPoseEncoder(nn.Module):
                     )
             self.ffs.append(ff)
 
-            ff_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
+            ff_layer_norm = MedPoseLayerNorm(model_dim, eps=1e-05)
             self.ff_layer_norms.append(ff_layer_norm)
     
     def forward(self, feature_maps, cf_region_features, initial_frame=True, local_rnn=False):
@@ -139,7 +142,11 @@ class MedPoseEncoder(nn.Module):
             formulate query and past_context for attention
             mechanism
             '''
-            query = cf_region_features
+            if enc_layer == 0:
+                query = cf_region_features
+            else:
+                # use output of previous layer as query as well (self-attention?)
+                query = enc_in.permute(0, 3, 1, 2).contiguous()
             if local_rnn:
                 context = curr_enc_hist.get_lrnn_history(enc_layer)
             else:
