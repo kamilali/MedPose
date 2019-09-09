@@ -32,6 +32,7 @@ class med_pose_network(nn.Module):
         '''
         dim_in = cfg.MEDPOSE.MODEL_DIM
         hidden_dim = 1088                   # testing for now that's why its not in config file
+        #hidden_dim = 512
         kernel_size = cfg.KRCNN.CONV_HEAD_KERNEL
         pad_size = kernel_size // 2
         module_list = []
@@ -168,33 +169,32 @@ class med_pose_network(nn.Module):
             sampling_ratio=cfg.KRCNN.ROI_XFORM_SAMPLING_RATIO
         )
         # testing stuff
-        #heat_out = self.conv_fcn_rf(region_features)
-        #heat_out = self.conv_fcn_kp(heat_out)
+        region_features = self.conv_fcn_rf(region_features)
+        residual_connection = self.conv_fcn_kp(region_features) # used for later learning signal reinforcement (can share conv weights for region feature feature enlargement)
         
         # real stuff
         formatted_region_features, batch_dict = self._reformat_region_feats(region_features, rpn_ret[blob_roi_str], feature_map.shape[0], device_id)
-        formatted_region_features = formatted_region_features.view(*formatted_region_features.shape[:-2], -1).permute(0, 2, 1, 3)
-        formatted_region_features = self.conv_fcn_rf(formatted_region_features)
-        #residual_connection = self.conv_fcn_kp(region_features) # used for later learning signal reinforcement (can share conv weights for region feature feature enlargement)
-        formatted_region_features = formatted_region_features.view(*formatted_region_features.shape[:-1], cfg.KRCNN.ROI_XFORM_RESOLUTION, cfg.KRCNN.ROI_XFORM_RESOLUTION).permute(0, 2, 1, 3, 4)
+        #formatted_region_features = formatted_region_features.view(*formatted_region_features.shape[:-2], -1).permute(0, 2, 1, 3)
+        #formatted_region_features = self.conv_fcn_rf(formatted_region_features)
+        #formatted_region_features = formatted_region_features.view(*formatted_region_features.shape[:-1], cfg.KRCNN.ROI_XFORM_RESOLUTION, cfg.KRCNN.ROI_XFORM_RESOLUTION).permute(0, 2, 1, 3, 4)
         #print("inputs into encoder stack", feature_map.unsqueeze(dim=1).shape, formatted_region_features.shape)
         enc_out = self.encoder(feature_map.unsqueeze(dim=1), formatted_region_features.contiguous(), initial_frame, True)
         #print("output of encoder stack", enc_out.shape)
         enc_out = self._reconstruct_outputs(enc_out, batch_dict)
         enc_out = enc_out.view(enc_out.shape[0], cfg.KRCNN.NUM_KEYPOINTS, cfg.KRCNN.ROI_XFORM_RESOLUTION, cfg.KRCNN.ROI_XFORM_RESOLUTION)
         # residual connection to enforce learning (viewing into heatmap doesn't take into account spatial information --> still have to test this theory with ablation)
-        #heat_out = enc_out + residual_connection
-        heat_out = enc_out
+        heat_out = enc_out + residual_connection
+        #heat_out = enc_out
         # classifier (whether they contribute to human poses or not) -> not currently used
-        cl_in = region_features.view(region_features.shape[0], -1)
-        cl_out = self.pose_cl(cl_in)
+        # cl_in = region_features.view(region_features.shape[0], -1)
+        # cl_out = self.pose_cl(cl_in)
         # new strategy: produce heatmaps
         heat_out = self.heatmap_bilinear_interpolation(heat_out)
         # old strategy: regress keypoints
         #reg_out = self.pose_regress(enc_out)
         #reg_out = reg_out.view(reg_out.shape[0], cfg.MEDPOSE.NUM_KEYPOINTS, 2).permute(0,2,1)
         #return reg_out, cl_out
-        return heat_out, cl_out
+        return heat_out, None
 
     ################ THIS OUTPUTS DATA SIMILAR TO WHAT WE SAW IN FIRST IMPL #################
     # def forward(self, feature_map, region_features, rois, pose_detections=[], initial_frame=True):
