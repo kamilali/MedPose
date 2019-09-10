@@ -33,6 +33,10 @@ __C.TRAIN = AttrDict()
 # If multiple datasets are listed, the model is trained on their union
 __C.TRAIN.DATASETS = ()
 
+# Deciding whether training for pose estimation and tracking in videos
+# or just estimation for standalone frames
+__C.TRAIN.POSE_TRACKING = False
+
 # Scales to use during training
 # Each scale is the pixel size of an image's shortest side
 # If multiple scales are listed, then one is selected uniformly at random for

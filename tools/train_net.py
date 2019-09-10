@@ -149,7 +149,10 @@ def main():
     if args.dataset == "coco2017":
         cfg.TRAIN.DATASETS = ('coco_2017_train',)
     elif args.dataset == "keypoints_coco2017":
-        cfg.TRAIN.DATASETS = ('keypoints_coco_2017_train',)
+        if cfg.TRAIN.POSETRACKING:
+            cfg.TRAIN.DATASETS = ('posetrack')
+        else:
+            cfg.TRAIN.DATASETS = ('keypoints_coco_2017_train',)
     else:
         raise ValueError("Unexpected args.dataset: {}".format(args.dataset))
 
