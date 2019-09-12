@@ -29,7 +29,7 @@ import utils.keypoints as keypoint_utils
 import utils.segms as segm_utils
 import utils.blob as blob_utils
 from core.config import cfg
-from .json_dataset import JsonDataset
+from .json_dataset_tracking import JsonDataset
 
 logger = logging.getLogger(__name__)
 

@@ -30,6 +30,7 @@ _DATA_DIR = cfg.DATA_DIR
 # Required dataset entry keys
 IM_DIR = 'image_directory'
 ANN_FN = 'annotation_file'
+ANN_DIR = 'annotation_directory'
 
 # Optional dataset entry keys
 IM_PREFIX = 'image_prefix'
@@ -192,6 +193,12 @@ DATASETS = {
             _DATA_DIR + '/coco/images/test2017',
         ANN_FN:
             _DATA_DIR + '/coco/annotations/image_info_test2017.json'
+    },
+    'posetrack': {
+        IM_DIR:
+            _DATA_DIR + '/posetrack',
+        ANN_DIR:
+            _DATA_DIR + '/posetrack/posetrack_data/annotations/train',
     },
     'voc_2007_trainval': {
         IM_DIR:

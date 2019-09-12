@@ -35,7 +35,7 @@ __C.TRAIN.DATASETS = ()
 
 # Deciding whether training for pose estimation and tracking in videos
 # or just estimation for standalone frames
-__C.TRAIN.POSE_TRACKING = False
+__C.TRAIN.POSETRACKING = False
 
 # Scales to use during training
 # Each scale is the pixel size of an image's shortest side

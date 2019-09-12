@@ -22,7 +22,7 @@ import nn as mynn
 import utils.net as net_utils
 import utils.misc as misc_utils
 from core.config import cfg, cfg_from_file, cfg_from_list, assert_and_infer_cfg
-from datasets.roidb import combined_roidb_for_training
+
 from roi_data.loader import RoiDataLoader, MinibatchSampler, collate_minibatch
 from modeling.model_builder import Generalized_RCNN
 from utils.detectron_weight_helper import load_detectron_weight
@@ -140,6 +140,10 @@ def main():
 
     if not torch.cuda.is_available():
         sys.exit("Need a CUDA device to run the code.")
+    
+    cfg_from_file(args.cfg_file)
+    if args.set_cfgs is not None:
+        cfg_from_list(args.set_cfgs)
 
     if args.cuda or cfg.NUM_GPUS > 0:
         cfg.CUDA = True
@@ -156,9 +160,13 @@ def main():
     else:
         raise ValueError("Unexpected args.dataset: {}".format(args.dataset))
 
-    cfg_from_file(args.cfg_file)
-    if args.set_cfgs is not None:
-        cfg_from_list(args.set_cfgs)
+    ### import correct module based on pose tracking flag
+    if not cfg.TRAIN.POSETRACKING:
+        print("importing module for pose estimation")
+        from datasets.roidb import combined_roidb_for_training
+    else:
+        print("importing module for pose estimation + tracking")
+        from datasets.roidb_tracking import combined_roidb_for_training
 
     ### Adaptively adjust some configs ###
     original_batch_size = cfg.NUM_GPUS * cfg.TRAIN.IMS_PER_BATCH
