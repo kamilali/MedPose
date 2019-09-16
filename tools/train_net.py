@@ -1,428 +1,191 @@
-""" Training Script """
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
+r"""
+Basic training script for PyTorch
+"""
+
+# Set up custom environment before nearly anything else is imported
+# NOTE: this should be the first import (no not reorder)
+from maskrcnn_benchmark.utils.env import setup_environment  # noqa F401 isort:skip
 
 import argparse
-import distutils.util
 import os
-import sys
-import pickle
-import traceback
-import logging
-from collections import defaultdict
 
-import numpy as np
-import yaml
 import torch
-from torch.autograd import Variable
-import torch.nn as nn
-import cv2
-cv2.setNumThreads(0)  # pytorch issue 1355: possible deadlock in dataloader
+from maskrcnn_benchmark.config import cfg
+from maskrcnn_benchmark.data import make_data_loader
+from maskrcnn_benchmark.solver import make_lr_scheduler
+from maskrcnn_benchmark.solver import make_optimizer
+from maskrcnn_benchmark.engine.inference import inference
+from maskrcnn_benchmark.engine.trainer import do_train
+from maskrcnn_benchmark.modeling.detector import build_detection_model
+from maskrcnn_benchmark.utils.checkpoint import DetectronCheckpointer
+from maskrcnn_benchmark.utils.collect_env import collect_env_info
+from maskrcnn_benchmark.utils.comm import synchronize, get_rank
+from maskrcnn_benchmark.utils.imports import import_file
+from maskrcnn_benchmark.utils.logger import setup_logger
+from maskrcnn_benchmark.utils.miscellaneous import mkdir, save_config
 
-import _init_paths  # pylint: disable=unused-import
-import nn as mynn
-import utils.net as net_utils
-import utils.misc as misc_utils
-from core.config import cfg, cfg_from_file, cfg_from_list, assert_and_infer_cfg
-
-from roi_data.loader import RoiDataLoader, MinibatchSampler, collate_minibatch
-from modeling.model_builder import Generalized_RCNN
-from utils.detectron_weight_helper import load_detectron_weight
-from utils.timer import Timer
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# See if we can use apex.DistributedDataParallel instead of the torch default,
+# and enable mixed-precision via apex.amp
+try:
+    from apex import amp
+except ImportError:
+    raise ImportError('Use APEX for multi-precision via apex.amp')
 
 
-def parse_args():
-    """Parse input arguments"""
-    parser = argparse.ArgumentParser(description='Train a X-RCNN network')
+def train(cfg, local_rank, distributed):
+    model = build_detection_model(cfg)
+    device = torch.device(cfg.MODEL.DEVICE)
+    model.to(device)
 
-    parser.add_argument(
-        '--dataset', dest='dataset', required=True,
-        help='Dataset to use')
-    parser.add_argument(
-        '--cfg', dest='cfg_file', required=True,
-        help='Config file for training (and optionally testing)')
-    parser.add_argument(
-        '--set', dest='set_cfgs',
-        help='Set config keys. Key value sequence seperate by whitespace.'
-             'e.g. [key] [value] [key] [value]',
-        default=[], nargs='+')
+    optimizer = make_optimizer(cfg, model)
+    scheduler = make_lr_scheduler(cfg, optimizer)
 
-    parser.add_argument(
-        '--disp_interval',
-        help='Display training info every N iterations',
-        default=100, type=int)
-    parser.add_argument(
-        '--no_cuda', dest='cuda', help='Do not use CUDA device', action='store_false')
+    # Initialize mixed-precision training
+    use_mixed_precision = cfg.DTYPE == "float16"
+    amp_opt_level = 'O1' if use_mixed_precision else 'O0'
+    model, optimizer = amp.initialize(model, optimizer, opt_level=amp_opt_level)
 
-    # Optimization
-    # These options has the highest prioity and can overwrite the values in config file
-    # or values set by set_cfgs. `None` means do not overwrite.
-    parser.add_argument(
-        '--bs', dest='batch_size',
-        help='Explicitly specify to overwrite the value comed from cfg_file.',
-        type=int)
-    parser.add_argument(
-        '--nw', dest='num_workers',
-        help='Explicitly specify to overwrite number of workers to load data. Defaults to 4',
-        type=int)
+    if distributed:
+        model = torch.nn.parallel.DistributedDataParallel(
+            model, device_ids=[local_rank], output_device=local_rank,
+            # this should be removed if we update BatchNorm stats
+            broadcast_buffers=False,
+        )
 
-    parser.add_argument(
-        '--o', dest='optimizer', help='Training optimizer.',
-        default=None)
-    parser.add_argument(
-        '--lr', help='Base learning rate.',
-        default=None, type=float)
-    parser.add_argument(
-        '--lr_decay_gamma',
-        help='Learning rate decay rate.',
-        default=None, type=float)
-    parser.add_argument(
-        '--lr_decay_epochs',
-        help='Epochs to decay the learning rate on. '
-             'Decay happens on the beginning of a epoch. '
-             'Epoch is 0-indexed.',
-        default=[4, 5], nargs='+', type=int)
+    arguments = {}
+    arguments["iteration"] = 0
 
-    # Epoch
-    parser.add_argument(
-        '--start_iter',
-        help='Starting iteration for first training epoch. 0-indexed.',
-        default=0, type=int)
-    parser.add_argument(
-        '--start_epoch',
-        help='Starting epoch count. Epoch is 0-indexed.',
-        default=0, type=int)
-    parser.add_argument(
-        '--epochs', dest='num_epochs',
-        help='Number of epochs to train',
-        default=6, type=int)
+    output_dir = cfg.OUTPUT_DIR
 
-    # Resume training: requires same iterations per epoch
-    parser.add_argument(
-        '--resume',
-        help='resume to training on a checkpoint',
-        action='store_true')
+    save_to_disk = get_rank() == 0
+    checkpointer = DetectronCheckpointer(
+        cfg, model, optimizer, scheduler, output_dir, save_to_disk
+    )
+    extra_checkpoint_data = checkpointer.load(cfg.MODEL.WEIGHT)
+    arguments.update(extra_checkpoint_data)
 
-    # Checkpoint and Logging
-    parser.add_argument(
-        '--output_base_dir',
-        help='Output base directory',
-        default="Outputs")
+    data_loader = make_data_loader(
+        cfg,
+        is_train=True,
+        is_distributed=distributed,
+        start_iter=arguments["iteration"],
+    )
 
-    parser.add_argument(
-        '--no_save', help='do not save anything', action='store_true')
+    checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
 
-    parser.add_argument(
-        '--ckpt_num_per_epoch',
-        help='number of checkpoints to save in each epoch. '
-             'Not include the one at the end of an epoch.',
-        default=3, type=int)
+    do_train(
+        model,
+        data_loader,
+        optimizer,
+        scheduler,
+        checkpointer,
+        device,
+        checkpoint_period,
+        arguments,
+    )
 
-    parser.add_argument(
-        '--load_ckpt', help='checkpoint path to load')
-    parser.add_argument(
-        '--load_detectron', help='path to the detectron weight pickle file')
+    return model
 
-    parser.add_argument(
-        '--use_tfboard', help='Use tensorflow tensorboard to log training info',
-        action='store_true')
 
-    return parser.parse_args()
+def run_test(cfg, model, distributed):
+    if distributed:
+        model = model.module
+    torch.cuda.empty_cache()  # TODO check if it helps
+    iou_types = ("bbox",)
+    if cfg.MODEL.MASK_ON:
+        iou_types = iou_types + ("segm",)
+    if cfg.MODEL.KEYPOINT_ON:
+        iou_types = iou_types + ("keypoints",)
+    output_folders = [None] * len(cfg.DATASETS.TEST)
+    dataset_names = cfg.DATASETS.TEST
+    if cfg.OUTPUT_DIR:
+        for idx, dataset_name in enumerate(dataset_names):
+            output_folder = os.path.join(cfg.OUTPUT_DIR, "inference", dataset_name)
+            mkdir(output_folder)
+            output_folders[idx] = output_folder
+    data_loaders_val = make_data_loader(cfg, is_train=False, is_distributed=distributed)
+    for output_folder, dataset_name, data_loader_val in zip(output_folders, dataset_names, data_loaders_val):
+        inference(
+            model,
+            data_loader_val,
+            dataset_name=dataset_name,
+            iou_types=iou_types,
+            box_only=False if cfg.MODEL.RETINANET_ON else cfg.MODEL.RPN_ONLY,
+            device=cfg.MODEL.DEVICE,
+            expected_results=cfg.TEST.EXPECTED_RESULTS,
+            expected_results_sigma_tol=cfg.TEST.EXPECTED_RESULTS_SIGMA_TOL,
+            output_folder=output_folder,
+        )
+        synchronize()
 
 
 def main():
-    """Main function"""
+    parser = argparse.ArgumentParser(description="PyTorch Object Detection Training")
+    parser.add_argument(
+        "--config-file",
+        default="",
+        metavar="FILE",
+        help="path to config file",
+        type=str,
+    )
+    parser.add_argument("--local_rank", type=int, default=0)
+    parser.add_argument(
+        "--skip-test",
+        dest="skip_test",
+        help="Do not test the final model",
+        action="store_true",
+    )
+    parser.add_argument(
+        "opts",
+        help="Modify config options using the command-line",
+        default=None,
+        nargs=argparse.REMAINDER,
+    )
 
-    args = parse_args()
-    print('Called with args:')
-    print(args)
+    args = parser.parse_args()
 
-    if not torch.cuda.is_available():
-        sys.exit("Need a CUDA device to run the code.")
-    
-    cfg_from_file(args.cfg_file)
-    if args.set_cfgs is not None:
-        cfg_from_list(args.set_cfgs)
+    num_gpus = int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
+    args.distributed = num_gpus > 1
 
-    if args.cuda or cfg.NUM_GPUS > 0:
-        cfg.CUDA = True
-    else:
-        raise ValueError("Need Cuda device to run !")
+    if args.distributed:
+        torch.cuda.set_device(args.local_rank)
+        torch.distributed.init_process_group(
+            backend="nccl", init_method="env://"
+        )
+        synchronize()
 
-    if args.dataset == "coco2017":
-        cfg.TRAIN.DATASETS = ('coco_2017_train',)
-    elif args.dataset == "keypoints_coco2017":
-        if cfg.TRAIN.POSETRACKING:
-            cfg.TRAIN.DATASETS = ('posetrack')
-        else:
-            cfg.TRAIN.DATASETS = ('keypoints_coco_2017_train',)
-    else:
-        raise ValueError("Unexpected args.dataset: {}".format(args.dataset))
+    cfg.merge_from_file(args.config_file)
+    cfg.merge_from_list(args.opts)
+    cfg.freeze()
 
-    ### import correct module based on pose tracking flag
-    if not cfg.TRAIN.POSETRACKING:
-        print("importing module for pose estimation")
-        from datasets.roidb import combined_roidb_for_training
-    else:
-        print("importing module for pose estimation + tracking")
-        from datasets.roidb_tracking import combined_roidb_for_training
+    output_dir = cfg.OUTPUT_DIR
+    if output_dir:
+        mkdir(output_dir)
 
-    ### Adaptively adjust some configs ###
-    original_batch_size = cfg.NUM_GPUS * cfg.TRAIN.IMS_PER_BATCH
-    if args.batch_size is None:
-        args.batch_size = original_batch_size
-    cfg.NUM_GPUS = torch.cuda.device_count()
-    assert (args.batch_size % cfg.NUM_GPUS) == 0, \
-        'batch_size: %d, NUM_GPUS: %d' % (args.batch_size, cfg.NUM_GPUS)
-    cfg.TRAIN.IMS_PER_BATCH = args.batch_size // cfg.NUM_GPUS
-    print('Batch size change from {} (in config file) to {}'.format(
-        original_batch_size, args.batch_size))
-    print('NUM_GPUs: %d, TRAIN.IMS_PER_BATCH: %d' % (cfg.NUM_GPUS, cfg.TRAIN.IMS_PER_BATCH))
+    logger = setup_logger("maskrcnn_benchmark", output_dir, get_rank())
+    logger.info("Using {} GPUs".format(num_gpus))
+    logger.info(args)
 
-    if args.num_workers is not None:
-        cfg.DATA_LOADER.NUM_THREADS = args.num_workers
-    print('Number of data loading threads: %d' % cfg.DATA_LOADER.NUM_THREADS)
+    logger.info("Collecting env info (might take some time)")
+    logger.info("\n" + collect_env_info())
 
-    ### Adjust learning based on batch size change linearly
-    old_base_lr = cfg.SOLVER.BASE_LR
-    cfg.SOLVER.BASE_LR *= args.batch_size / original_batch_size
-    print('Adjust BASE_LR linearly according to batch size change: {} --> {}'.format(
-        old_base_lr, cfg.SOLVER.BASE_LR))
+    logger.info("Loaded configuration file {}".format(args.config_file))
+    with open(args.config_file, "r") as cf:
+        config_str = "\n" + cf.read()
+        logger.info(config_str)
+    logger.info("Running with config:\n{}".format(cfg))
 
-    ### Overwrite some solver settings from command line arguments
-    if args.optimizer is not None:
-        cfg.SOLVER.TYPE = args.optimizer
-    if args.lr is not None:
-        cfg.SOLVER.BASE_LR = args.lr
-    if args.lr_decay_gamma is not None:
-        cfg.SOLVER.GAMMA = args.lr_decay_gamma
+    output_config_path = os.path.join(cfg.OUTPUT_DIR, 'config.yml')
+    logger.info("Saving config into: {}".format(output_config_path))
+    # save overloaded model config in the output directory
+    save_config(cfg, output_config_path)
 
-    args.mGPUs = (cfg.NUM_GPUS > 1)
+    model = train(cfg, args.local_rank, args.distributed)
 
-    timers = defaultdict(Timer)
-
-    ### Dataset ###
-    timers['roidb'].tic()
-    roidb, ratio_list, ratio_index = combined_roidb_for_training(
-        cfg.TRAIN.DATASETS, cfg.TRAIN.PROPOSAL_FILES)
-    timers['roidb'].toc()
-    train_size = len(roidb)
-    logger.info('{:d} roidb entries'.format(train_size))
-    logger.info('Takes %.2f sec(s) to construct roidb', timers['roidb'].average_time)
-
-    sampler = MinibatchSampler(ratio_list, ratio_index)
-    dataset = RoiDataLoader(
-        roidb,
-        cfg.MODEL.NUM_CLASSES,
-        training=True)
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        sampler=sampler,
-        num_workers=cfg.DATA_LOADER.NUM_THREADS,
-        collate_fn=collate_minibatch)
-
-    assert_and_infer_cfg()
-
-    ### Model ###
-    maskRCNN = Generalized_RCNN()
-
-    if cfg.CUDA:
-        maskRCNN.cuda()
-
-    ### Optimizer ###
-    bias_params = []
-    nonbias_params = []
-    for key, value in dict(maskRCNN.named_parameters()).items():
-        if value.requires_grad:
-            if 'bias' in key:
-                bias_params.append(value)
-            else:
-                nonbias_params.append(value)
-    params = [
-        {'params': nonbias_params,
-         'lr': cfg.SOLVER.BASE_LR,
-         'weight_decay': cfg.SOLVER.WEIGHT_DECAY},
-        {'params': bias_params,
-         'lr': cfg.SOLVER.BASE_LR * (cfg.SOLVER.BIAS_DOUBLE_LR + 1),
-         'weight_decay': cfg.SOLVER.WEIGHT_DECAY if cfg.SOLVER.BIAS_WEIGHT_DECAY else 0}
-    ]
-
-    if cfg.SOLVER.TYPE == "SGD":
-        optimizer = torch.optim.SGD(params, momentum=cfg.SOLVER.MOMENTUM)
-    elif cfg.SOLVER.TYPE == "Adam":
-        optimizer = torch.optim.Adam(params)
-
-    ### Load checkpoint
-    if args.load_ckpt:
-        load_name = args.load_ckpt
-        logging.info("loading checkpoint %s", load_name)
-        checkpoint = torch.load(load_name, map_location=lambda storage, loc: storage)
-        net_utils.load_ckpt(maskRCNN, checkpoint['model'])
-        if args.resume:
-            assert checkpoint['iters_per_epoch'] == train_size // args.batch_size, \
-                "iters_per_epoch should match for resume"
-            # There is a bug in optimizer.load_state_dict on Pytorch 0.3.1.
-            # However it's fixed on master.
-            # optimizer.load_state_dict(checkpoint['optimizer'])
-            misc_utils.load_optimizer_state_dict(optimizer, checkpoint['optimizer'])
-            if checkpoint['step'] == (checkpoint['iters_per_epoch'] - 1):
-                # Resume from end of an epoch
-                args.start_epoch = checkpoint['epoch'] + 1
-                args.start_iter = 0
-            else:
-                # Resume from the middle of an epoch.
-                # NOTE: dataloader is not synced with previous state
-                args.start_epoch = checkpoint['epoch']
-                args.start_iter = checkpoint['step'] + 1
-        del checkpoint
-        torch.cuda.empty_cache()
-
-    if args.load_detectron:  #TODO resume for detectron weights (load sgd momentum values)
-        logging.info("loading Detectron weights %s", args.load_detectron)
-        load_detectron_weight(maskRCNN, args.load_detectron)
-
-    lr = optimizer.param_groups[0]['lr']  # lr of non-bias parameters, for commmand line outputs.
-
-    maskRCNN = mynn.DataParallel(maskRCNN, cpu_keywords=['im_info', 'roidb'],
-                                 minibatch=True)
-
-    ### Training Setups ###
-    run_name = misc_utils.get_run_name()
-    output_dir = misc_utils.get_output_dir(args, run_name)
-
-    if not args.no_save:
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-        blob = {'cfg': yaml.dump(cfg), 'args': args}
-        with open(os.path.join(output_dir, 'config_and_args.pkl'), 'wb') as f:
-            pickle.dump(blob, f, pickle.HIGHEST_PROTOCOL)
-
-        if args.use_tfboard:
-            from tensorboardX import SummaryWriter
-            # Set the Tensorboard logger
-            tblogger = SummaryWriter(output_dir)
-
-    ### Training Loop ###
-    maskRCNN.train()
-
-    iters_per_epoch = int(train_size / args.batch_size)  # drop last
-    ckpt_interval_per_epoch = iters_per_epoch // args.ckpt_num_per_epoch
-    step = 0
-    try:
-        logger.info('Training starts !')
-        for epoch in range(args.start_epoch, args.start_epoch + args.num_epochs):
-            # ---- Start of epoch ----
-            loss_avg = 0
-            timers['train_loop'].tic()
-
-            # adjust learning rate
-            if args.lr_decay_epochs and epoch == args.lr_decay_epochs[0] and args.start_iter == 0:
-                args.lr_decay_epochs.pop(0)
-                net_utils.decay_learning_rate(optimizer, lr, cfg.SOLVER.GAMMA)
-                lr *= cfg.SOLVER.GAMMA
-
-            for step, input_data in zip(range(args.start_iter, iters_per_epoch), dataloader):
-
-                for key in input_data:
-                    if key != 'roidb': # roidb is a list of ndarrays with inconsistent length
-                        input_data[key] = list(map(Variable, input_data[key]))
-
-                outputs = maskRCNN(**input_data)
-
-                rois_label = outputs['rois_label']
-                cls_score = outputs['cls_score']
-                bbox_pred = outputs['bbox_pred']
-                loss_rpn_cls = outputs['loss_rpn_cls'].mean()
-                loss_rpn_bbox = outputs['loss_rpn_bbox'].mean()
-                loss_rcnn_cls = outputs['loss_rcnn_cls'].mean()
-                loss_rcnn_bbox = outputs['loss_rcnn_bbox'].mean()
-
-                loss = loss_rpn_cls + loss_rpn_bbox + loss_rcnn_cls + loss_rcnn_bbox
-
-                if cfg.MODEL.MASK_ON:
-                    loss_rcnn_mask = outputs['loss_rcnn_mask'].mean()
-                    loss += loss_rcnn_mask
-
-                if cfg.MODEL.KEYPOINTS_ON:
-                    loss_rcnn_keypoints = outputs['loss_rcnn_keypoints'].mean()
-                    loss += loss_rcnn_keypoints
-
-                loss_avg += loss.data.cpu().numpy()[0]
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                if (step+1) % ckpt_interval_per_epoch == 0:
-                    net_utils.save_ckpt(output_dir, args, epoch, step, maskRCNN, optimizer, iters_per_epoch)
-
-                if (step+1) % args.disp_interval == 0:
-                    if (step + 1 - args.start_iter) >= args.disp_interval:  # for the case of resume
-                        diff = timers['train_loop'].toc(average=False)
-                        loss_avg /= args.disp_interval
-
-                        loss_rpn_cls = loss_rpn_cls.data[0]
-                        loss_rpn_bbox = loss_rpn_bbox.data[0]
-                        loss_rcnn_cls = loss_rcnn_cls.data[0]
-                        loss_rcnn_bbox = loss_rcnn_bbox.data[0]
-                        fg_cnt = torch.sum(rois_label.data.ne(0))
-                        bg_cnt = rois_label.data.numel() - fg_cnt
-                        print("[%s][epoch %2d][iter %4d / %4d]"
-                            % (run_name, epoch, step, iters_per_epoch))
-                        print("\t\tloss: %.4f, lr: %.2e" % (loss_avg, lr))
-                        print("\t\tfg/bg=(%d/%d), time cost: %f" % (fg_cnt, bg_cnt, diff))
-                        print("\t\trpn_cls: %.4f, rpn_bbox: %.4f, rcnn_cls: %.4f, rcnn_bbox %.4f"
-                            % (loss_rpn_cls, loss_rpn_bbox, loss_rcnn_cls, loss_rcnn_bbox))
-
-                        print_prefix = "\t\t"
-                        if cfg.MODEL.MASK_ON:
-                            loss_rcnn_mask = loss_rcnn_mask.data[0]
-                            print("%srcnn_mask %.4f" % (print_prefix, loss_rcnn_mask))
-                            print_prefix = ", "
-                        if cfg.MODEL.KEYPOINTS_ON:
-                            loss_rcnn_keypoints = loss_rcnn_keypoints.data[0]
-                            print("%srcnn_keypoints %.4f" % (print_prefix, loss_rcnn_keypoints))
-
-                        if args.use_tfboard:
-                            info = {
-                                'loss': loss_avg,
-                                'loss_rpn_cls': loss_rpn_cls,
-                                'loss_rpn_box': loss_rpn_bbox,
-                                'loss_rcnn_cls': loss_rcnn_cls,
-                                'loss_rcnn_box': loss_rcnn_bbox,
-                            }
-                            if cfg.MODEL.MASK_ON:
-                                info['loss_rcnn_mask'] = loss_rcnn_mask
-                            if cfg.MODEL.KEYPOINTS_ON:
-                                info['loss_rcnn_keypoints'] = loss_rcnn_keypoints
-                            for tag, value in info.items():
-                                tblogger.add_scalar(tag, value, iters_per_epoch * epoch + step)
-
-                    loss_avg = 0
-                    timers['train_loop'].tic()
-
-            # ---- End of epoch ----
-            # save checkpoint
-            net_utils.save_ckpt(output_dir, args, epoch, step, maskRCNN, optimizer, iters_per_epoch)
-            # reset timer
-            timers['train_loop'].reset()
-            # reset starting iter number after first epoch
-            args.start_iter = 0
-
-    except (RuntimeError, KeyboardInterrupt) as e:
-        print('Save on exception:', e)
-        net_utils.save_ckpt(output_dir, args, epoch, step, maskRCNN, optimizer, iters_per_epoch)
-        stack_trace = traceback.format_exc()
-        print(stack_trace)
-
-    finally:
-        # ---- Training ends ----
-        if args.use_tfboard:
-            tblogger.close()
+    if not args.skip_test:
+        run_test(cfg, model, args.distributed)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
