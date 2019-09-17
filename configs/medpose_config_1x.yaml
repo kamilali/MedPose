@@ -52,5 +52,5 @@ SOLVER:
   WEIGHT_DECAY: 0.0001
   STEPS: (60000, 80000)
   MAX_ITER: 90000
-OUTPUT_DIR: "/pasteur/u/kamil/models_medpose"
+OUTPUT_DIR: "/pasteur/u/kamil/models_medpose_wo_encoder"
 NUM_GPUS: 1

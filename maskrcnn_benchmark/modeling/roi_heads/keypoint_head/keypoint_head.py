@@ -111,19 +111,23 @@ class ROIKeypointHead(torch.nn.Module):
 
             x = self.feature_extractor(features, proposals)
             residual_connection = self.conv_fcn1(x)
+            ablation = True # since we are ablating, this flag is set to true
+            if ablation:
+                # not using encoder output, simply passing the residual connection through the heatmap builder
+                kp_logits = self.heatmap_builder(residual_connection)
+            else:
+                rois = self.convert_to_roi_format(proposals)
+                region_features, restore_dict = self._reformat_region_feats(x, rois, features[0].shape[0])
 
-            rois = self.convert_to_roi_format(proposals)
-            region_features, restore_dict = self._reformat_region_feats(x, rois, features[0].shape[0])
-
-            enc_out = self.encoder(feature_map, region_features, True, True)
-            enc_out = self._reconstruct_outputs(enc_out, restore_dict)
-            enc_out = enc_out.view(enc_out.shape[0], self.cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM)
-            # residual connection to enforce learning (viewing into heatmap doesn't take into account spatial information --> still have to test this theory with ablation) 
-            kp_logits = self.heatmap_builder(enc_out + residual_connection)
-            ## no ConvTranspose2d...just the interpolation
-            # kp_logits = layers.interpolate(
-            #     enc_out, scale_factor=self.up_scale, mode="bilinear", align_corners=False
-            # )
+                enc_out = self.encoder(feature_map, region_features, True, True)
+                enc_out = self._reconstruct_outputs(enc_out, restore_dict)
+                enc_out = enc_out.view(enc_out.shape[0], self.cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM)
+                # residual connection to enforce learning (viewing into heatmap doesn't take into account spatial information --> still have to test this theory with ablation) 
+                kp_logits = self.heatmap_builder(enc_out + residual_connection)
+                ## no ConvTranspose2d...just the interpolation
+                # kp_logits = layers.interpolate(
+                #     enc_out, scale_factor=self.up_scale, mode="bilinear", align_corners=False
+                # )
         else:
             x = self.feature_extractor(features, proposals)
             kp_logits = self.predictor(x)
