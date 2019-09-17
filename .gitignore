@@ -1,6 +1,3 @@
-data/
-Outputs*
-model_repository/
 __pycache__/
 *.pth
 *.out
