@@ -45,11 +45,17 @@ class GeneralizedRCNN(nn.Module):
         """
         if self.training and targets is None:
             raise ValueError("In training mode, targets should be passed")
+        
         images = to_image_list(images)
+        vid_shape = None
+        if len(images.tensors.shape) > 4:
+            vid_shape = images.tensors.shape[:2] # just get batch and sequence dimensions
+            images.tensors = images.tensors.view(-1, images.tensors.shape[2], images.tensors.shape[3], images.tensors.shape[4])
         features = self.backbone(images.tensors)
         proposals, proposal_losses = self.rpn(images, features, targets)
+        #features = [feature.view(*vid_shape, feature.shape[1], feature.shape[2], feature.shape[3]) for feature in features]
         if self.roi_heads:
-            x, result, detector_losses = self.roi_heads(features, proposals, targets)
+            x, result, detector_losses = self.roi_heads(features, proposals, targets, vid_shape)
         else:
             # RPN-only models don't have roi_heads
             x = features

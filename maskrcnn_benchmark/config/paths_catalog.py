@@ -115,6 +115,18 @@ class DatasetCatalog(object):
         "cityscapes_fine_instanceonly_seg_test_cocostyle": {
             "img_dir": "cityscapes/images",
             "ann_file": "cityscapes/annotations/instancesonly_filtered_gtFine_test.json"
+        },
+        "posetrack_train": {
+            "img_dir": "posetrack",
+            "ann_dir": "posetrack/annotations/train"
+        },
+        "posetrack_val": {
+            "img_dir": "posetrack",
+            "ann_dir": "posetrack/annotations/val"
+        },
+        "posetrack_test": {
+            "img_dir": "posetrack",
+            "ann_dir": "posetrack/annotations/test"
         }
     }
 
@@ -129,6 +141,17 @@ class DatasetCatalog(object):
             )
             return dict(
                 factory="COCODataset",
+                args=args,
+            )
+        elif "posetrack" in name:
+            data_dir = DatasetCatalog.DATA_DIR
+            attrs = DatasetCatalog.DATASETS[name]
+            args = dict(
+                root_posetrack=os.path.join(data_dir, attrs["img_dir"]),
+                annotations_dir=os.path.join(data_dir, attrs["ann_dir"])
+            )
+            return dict(
+                factory="PoseTrackDataset",
                 args=args,
             )
         elif "voc" in name:

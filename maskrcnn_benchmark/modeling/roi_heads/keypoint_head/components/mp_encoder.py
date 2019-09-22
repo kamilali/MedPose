@@ -147,7 +147,7 @@ class MedPoseEncoder(nn.Module):
                 query = cf_region_features
             else:
                 # use output of previous layer as query as well (self-attention?)
-                query = enc_in.permute(0, 3, 1, 2).contiguous()
+                query = enc_in[:,-1].permute(0, 2, 1).contiguous()
             if local_rnn:
                 context = curr_enc_hist.get_lrnn_history(enc_layer)
             else:

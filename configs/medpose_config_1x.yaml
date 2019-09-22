@@ -33,15 +33,15 @@ MODEL:
     FEATURE_ENLARGER: "KeypointRCNNFeatureEnlarger"
     HEATMAP_UPSCALE: 2
     STACK_LAYERS: 4
-    WINDOW_SIZE: 1
+    WINDOW_SIZE: 3
     ROI_MAP_DIM: 8
     MODEL_DIM: 1088
     NUM_KEYPOINTS: 17
   KEYPOINT_ON: True
   MEDPOSE_ON: True
 DATASETS:
-  TRAIN: ("keypoints_coco_2014_train", "keypoints_coco_2014_valminusminival",) #TRAIN: ("keypoints_coco_2017_train", "keypoints_coco_2017_val",)
-  TEST: ("keypoints_coco_2014_minival",) #TEST: ("keypoints_coco_2017_test",)
+  TRAIN: ("posetrack_train", "posetrack_val") # TRAIN: ("keypoints_coco_2014_train", "keypoints_coco_2014_valminusminival",) #TRAIN: ("keypoints_coco_2017_train", "keypoints_coco_2017_val",)
+  TEST: ("posetrack_test",) # TEST: ("keypoints_coco_2014_minival",) #TEST: ("keypoints_coco_2017_test",)
 INPUT:
   MIN_SIZE_TRAIN: (640, 672, 704, 736, 768, 800)
 DATALOADER:
@@ -52,5 +52,5 @@ SOLVER:
   WEIGHT_DECAY: 0.0001
   STEPS: (60000, 80000)
   MAX_ITER: 90000
-OUTPUT_DIR: "/pasteur/u/kamil/models_medpose_wo_encoder"
+OUTPUT_DIR: "/pasteur/u/kamil/models_medpose_w_posetrack"
 NUM_GPUS: 1

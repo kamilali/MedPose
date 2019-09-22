@@ -38,6 +38,7 @@ class ROIKeypointHead(torch.nn.Module):
                 roi_map_dim=cfg.MODEL.MEDPOSE.ROI_MAP_DIM,
                 gpus=range(cfg.NUM_GPUS),
                 lrnn_batch_norm=False)
+            self.lrnn_window_size = cfg.MODEL.MEDPOSE.WINDOW_SIZE
             # heatmap builder (can replace with just the interpolation)
             self.heatmap_builder = make_roi_keypoint_predictor(
                 cfg, cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, cfg.MODEL.MEDPOSE.HEATMAP_UPSCALE)
@@ -60,8 +61,9 @@ class ROIKeypointHead(torch.nn.Module):
         rois = torch.cat([ids, concat_boxes], dim=1)
         return rois
     
-    def _reformat_region_feats(self, region_features, rois, batch_size):
-        # reformat region to (batch_size x max_regions x ...), with padding, from (total_regions x ...) to process in batch
+    def _reformat_region_feats(self, region_features, rois, vid_shape): # reformat region to (batch_size x max_regions x ...), with padding, from (total_regions x ...) to process in batch max_regions = 300
+        batch_size = vid_shape[0]
+        seq_len = vid_shape[1]
         max_regions = 300
         default_shape = list(region_features.shape[1:])
         reformatted_region_feats = torch.zeros((batch_size, max_regions, *default_shape)).to(region_features.get_device())
@@ -87,7 +89,7 @@ class ROIKeypointHead(torch.nn.Module):
             return out[0,:1]
         return torch.cat(new_out, dim=0)
 
-    def forward(self, features, proposals, targets=None):
+    def forward(self, features, proposals, targets=None, vid_shape=None):
         """
         Arguments:
             features (list[Tensor]): feature-maps from possibly several levels
@@ -106,28 +108,43 @@ class ROIKeypointHead(torch.nn.Module):
             with torch.no_grad():
                 proposals = self.loss_evaluator.subsample(proposals, targets)
         if self.cfg.MODEL.MEDPOSE_ON:
+            preds = []
+            loss_proposals = proposals
             feature_map = features[0]
-            feature_map = self.feature_map_enlarger(feature_map, proposals).unsqueeze(dim=1)
-
-            x = self.feature_extractor(features, proposals)
-            residual_connection = self.conv_fcn1(x)
-            ablation = True # since we are ablating, this flag is set to true
+            feature_map = self.feature_map_enlarger(feature_map, proposals)
+            feature_map = feature_map.view(*vid_shape, feature_map.shape[1], feature_map.shape[2], feature_map.shape[3])
+            #x = self.feature_extractor(features, proposals)
+            #residual_connection = self.conv_fcn1(x)
+            ablation = False # if we are ablating, this flag is set to true
             if ablation:
                 # not using encoder output, simply passing the residual connection through the heatmap builder
                 kp_logits = self.heatmap_builder(residual_connection)
             else:
-                rois = self.convert_to_roi_format(proposals)
-                region_features, restore_dict = self._reformat_region_feats(x, rois, features[0].shape[0])
-
-                enc_out = self.encoder(feature_map, region_features, True, True)
-                enc_out = self._reconstruct_outputs(enc_out, restore_dict)
-                enc_out = enc_out.view(enc_out.shape[0], self.cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM)
-                # residual connection to enforce learning (viewing into heatmap doesn't take into account spatial information --> still have to test this theory with ablation) 
-                kp_logits = self.heatmap_builder(enc_out + residual_connection)
-                ## no ConvTranspose2d...just the interpolation
-                # kp_logits = layers.interpolate(
-                #     enc_out, scale_factor=self.up_scale, mode="bilinear", align_corners=False
-                # )
+                proposals = [proposals[(i * vid_shape[1]):(i * vid_shape[1] + vid_shape[1])] for i in range(vid_shape[0])]
+                # we iterate by seq x batch_len
+                proposals = list(zip(*proposals))
+                start_idx = 0
+                for curr_frame_idx in range(vid_shape[1]):
+                    start_idx = start_idx if curr_frame_idx < 3 else start_idx + 1
+                    end_idx = curr_frame_idx + 1
+                    proposal = proposals[curr_frame_idx]
+                    # residual connection to enforce learning of spatial heatmap
+                    residual_connection = self.conv_fcn1(self.feature_extractor(features, proposal))
+                    rois = self.convert_to_roi_format(proposal)
+                    x = self.feature_extractor(features, proposal)
+                    region_features, restore_dict = self._reformat_region_feats(x, rois, vid_shape)
+                    enc_out = self.encoder(feature_map[:,start_idx:end_idx], region_features, (curr_frame_idx == 0), True)
+                    enc_out = self._reconstruct_outputs(enc_out, restore_dict)
+                    enc_out = enc_out.view(enc_out.shape[0], self.cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM)
+                    # (viewing into heatmap doesn't take into account spatial information --> still have to test this theory with ablation) 
+                    kp_logits = self.heatmap_builder(enc_out + residual_connection)
+                    preds.append(kp_logits)
+                    ## no ConvTranspose2d...just the interpolation
+                    # kp_logits = layers.interpolate(
+                    #     enc_out, scale_factor=self.up_scale, mode="bilinear", align_corners=False
+                    # )
+                kp_logits = torch.cat(preds, dim=0)
+                proposals = loss_proposals
         else:
             x = self.feature_extractor(features, proposals)
             kp_logits = self.predictor(x)

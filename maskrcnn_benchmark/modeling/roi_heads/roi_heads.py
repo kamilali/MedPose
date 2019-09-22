@@ -20,7 +20,7 @@ class CombinedROIHeads(torch.nn.ModuleDict):
         if cfg.MODEL.KEYPOINT_ON and cfg.MODEL.ROI_KEYPOINT_HEAD.SHARE_BOX_FEATURE_EXTRACTOR:
             self.keypoint.feature_extractor = self.box.feature_extractor
 
-    def forward(self, features, proposals, targets=None):
+    def forward(self, features, proposals, targets=None, vid_shape=None):
         losses = {}
         # TODO rename x to roi_box_features, if it doesn't increase memory consumption
         x, detections, loss_box = self.box(features, proposals, targets)
@@ -50,7 +50,7 @@ class CombinedROIHeads(torch.nn.ModuleDict):
                 keypoint_features = x
             # During training, self.box() will return the unaltered proposals as "detections"
             # this makes the API consistent during training and testing
-            x, detections, loss_keypoint = self.keypoint(keypoint_features, detections, targets)
+            x, detections, loss_keypoint = self.keypoint(keypoint_features, detections, targets, vid_shape)
             losses.update(loss_keypoint)
         return x, detections, losses
 
