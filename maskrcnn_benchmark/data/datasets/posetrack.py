@@ -122,29 +122,38 @@ class PoseTrackDataset(torch.utils.data.Dataset):
         video_frames = coco.loadImgs(video_ids) 
         video_annotation = self.video_annotations[idx]
         for image, annotation in zip(video_frames, video_annotation):
-            image = Image.open(os.path.join(self.root_posetrack, image['file_name'])).convert("RGB")
-            #annotation = [obj for obj in annotation if obj["iscrowd"] == 0]
-            boxes = [obj["bbox"] for obj in annotation]
-            boxes = torch.as_tensor(boxes).reshape(-1, 4) # guard against no boxes
-            target = BoxList(boxes, image.size, mode="xywh").convert("xyxy")
+            new_im = list()
+            new_ann = list()
+            use = True
+            for obj in annotation:
+                if "bbox" not in obj:
+                    use = False
+                    print("filtered annotation that was not fully labeled...")
+                    break
+            if use:
+                image = Image.open(os.path.join(self.root_posetrack, image['file_name'])).convert("RGB")
+                #annotation = [obj for obj in annotation if obj["iscrowd"] == 0]
+                boxes = [obj["bbox"] for obj in annotation]
+                boxes = torch.as_tensor(boxes).reshape(-1, 4) # guard against no boxes
+                target = BoxList(boxes, image.size, mode="xywh").convert("xyxy")
 
-            classes = [obj["category_id"] for obj in annotation]
-            classes = [self.json_category_id_to_contiguous_id[c] for c in classes]
-            classes = torch.tensor(classes)
-            target.add_field("labels", classes)
+                classes = [obj["category_id"] for obj in annotation]
+                classes = [self.json_category_id_to_contiguous_id[c] for c in classes]
+                classes = torch.tensor(classes)
+                target.add_field("labels", classes)
 
-            if annotation and "keypoints" in annotation[0]:
-                keypoints = [obj["keypoints"] for obj in annotation]
-                keypoints = PersonKeypoints(keypoints, image.size)
-                target.add_field("keypoints", keypoints)
-            
-            target = target.clip_to_image(remove_empty=True)
+                if annotation and "keypoints" in annotation[0]:
+                    keypoints = [obj["keypoints"] for obj in annotation]
+                    keypoints = PersonKeypoints(keypoints, image.size)
+                    target.add_field("keypoints", keypoints)
+                
+                target = target.clip_to_image(remove_empty=True)
 
-            if self._transforms is not None:
-                image, target = self._transforms(image, target)
+                if self._transforms is not None:
+                    image, target = self._transforms(image, target)
 
-            images.append(image)
-            targets.append(target)
+                images.append(image)
+                targets.append(target)
         
         return images, targets, idx
     

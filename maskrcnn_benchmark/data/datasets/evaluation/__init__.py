@@ -4,7 +4,7 @@ from .coco import coco_evaluation
 from .voc import voc_evaluation
 
 
-def evaluate(dataset, predictions, output_folder, **kwargs):
+def evaluate(dataset, predictions, output_folder, posetrack_eval, **kwargs):
     """evaluate dataset using different methods based on dataset type.
     Args:
         dataset: Dataset object
@@ -16,9 +16,11 @@ def evaluate(dataset, predictions, output_folder, **kwargs):
         evaluation result
     """
     args = dict(
-        dataset=dataset, predictions=predictions, output_folder=output_folder, **kwargs
+        dataset=dataset, predictions=predictions, output_folder=output_folder, posetrack_eval=posetrack_eval, **kwargs
     )
     if isinstance(dataset, datasets.COCODataset):
+        return coco_evaluation(**args)
+    if isinstance(dataset, datasets.PoseTrackDataset):
         return coco_evaluation(**args)
     elif isinstance(dataset, datasets.PascalVOCDataset):
         return voc_evaluation(**args)

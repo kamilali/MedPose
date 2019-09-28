@@ -110,30 +110,43 @@ class ROIKeypointHead(torch.nn.Module):
         if self.cfg.MODEL.MEDPOSE_ON:
             preds = []
             loss_proposals = proposals
-            feature_map = features[0]
-            feature_map = self.feature_map_enlarger(feature_map, proposals)
-            feature_map = feature_map.view(*vid_shape, feature_map.shape[1], feature_map.shape[2], feature_map.shape[3])
-            #x = self.feature_extractor(features, proposals)
-            #residual_connection = self.conv_fcn1(x)
             ablation = False # if we are ablating, this flag is set to true
             if ablation:
                 # not using encoder output, simply passing the residual connection through the heatmap builder
+                x = self.feature_extractor(features, proposals)
+                residual_connection = self.conv_fcn1(x)
                 kp_logits = self.heatmap_builder(residual_connection)
             else:
                 proposals = [proposals[(i * vid_shape[1]):(i * vid_shape[1] + vid_shape[1])] for i in range(vid_shape[0])]
                 # we iterate by seq x batch_len
                 proposals = list(zip(*proposals))
-                start_idx = 0
+                transformed_features = [feature.view(*vid_shape, feature.shape[1], feature.shape[2], feature.shape[3]) for feature in features]
+                vid_feat_seq = []
+                region_feats_vec = []
                 for curr_frame_idx in range(vid_shape[1]):
-                    start_idx = start_idx if curr_frame_idx < 3 else start_idx + 1
-                    end_idx = curr_frame_idx + 1
+                    # get current frame proposals across batch of videos
                     proposal = proposals[curr_frame_idx]
-                    # residual connection to enforce learning of spatial heatmap
-                    residual_connection = self.conv_fcn1(self.feature_extractor(features, proposal))
+                    # get current frame feature maps across batch of videos and per FPN level
+                    cf_feature_maps = [transformed_feature[:,curr_frame_idx] for transformed_feature in transformed_features]
+                    # extract region features for encoder
+                    cf_x = self.feature_extractor(cf_feature_maps, proposal)
+                    region_feats_vec.append(cf_x)
+                    # residual connection to enforce learning of spatial heatmap from output of encoder
+                    residual_connection = self.conv_fcn1(cf_x)
+                    # reformat region features to encoder input format (will be reformatted agian later)
                     rois = self.convert_to_roi_format(proposal)
-                    x = self.feature_extractor(features, proposal)
-                    region_features, restore_dict = self._reformat_region_feats(x, rois, vid_shape)
-                    enc_out = self.encoder(feature_map[:,start_idx:end_idx], region_features, (curr_frame_idx == 0), True)
+                    region_features, restore_dict = self._reformat_region_feats(cf_x, rois, vid_shape)
+                    # get fine-grain feature map for encoder attention (currently operates on single feature level)
+                    # enlarge feature map to produce heatmap later
+                    # TODO: Assess FPN level attentions for regions across levels of FPN
+                    cf_feature_map = cf_feature_maps[0]
+                    cf_feature_map = self.feature_map_enlarger(cf_feature_map)
+                    # get feature map from video feature map sequence (we only care about the local window)
+                    vid_feat_seq.append(cf_feature_map)
+                    vid_feat_seq = vid_feat_seq[-self.cfg.MODEL.MEDPOSE.WINDOW_SIZE:]
+                    feature_map = torch.stack(vid_feat_seq, dim=1)
+                    # get output of encoder (heatmap producing features)
+                    enc_out = self.encoder(feature_map, region_features, (curr_frame_idx == 0), True)
                     enc_out = self._reconstruct_outputs(enc_out, restore_dict)
                     enc_out = enc_out.view(enc_out.shape[0], self.cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM)
                     # (viewing into heatmap doesn't take into account spatial information --> still have to test this theory with ablation) 
@@ -144,6 +157,7 @@ class ROIKeypointHead(torch.nn.Module):
                     #     enc_out, scale_factor=self.up_scale, mode="bilinear", align_corners=False
                     # )
                 kp_logits = torch.cat(preds, dim=0)
+                x = torch.cat(region_feats_vec, dim=0)
                 proposals = loss_proposals
         else:
             x = self.feature_extractor(features, proposals)
@@ -152,9 +166,8 @@ class ROIKeypointHead(torch.nn.Module):
         if not self.training:
             result = self.post_processor(kp_logits, proposals)
             return x, result, {}
-
-        loss_kp = self.loss_evaluator(proposals, kp_logits)
-
+        
+        print("GOT HERE...")
         return x, proposals, dict(loss_kp=loss_kp)
 
 

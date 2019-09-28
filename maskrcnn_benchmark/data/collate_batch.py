@@ -14,7 +14,11 @@ class BatchCollator(object):
 
     def __call__(self, batch):
         transposed_batch = list(zip(*batch))
-        images = to_image_list(transposed_batch[0], self.size_divisible)
+        img = transposed_batch[0]
+        if len(img[0]) == 0:
+            images = []
+        else:
+            images = to_image_list(img, self.size_divisible)
         targets = transposed_batch[1]
         img_ids = transposed_batch[2]
         return images, targets, img_ids

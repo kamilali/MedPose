@@ -18,6 +18,7 @@ def do_coco_evaluation(
     iou_types,
     expected_results,
     expected_results_sigma_tol,
+    posetrack_eval
 ):
     logger = logging.getLogger("maskrcnn_benchmark.inference")
 
@@ -28,7 +29,7 @@ def do_coco_evaluation(
         for limit in [100, 1000]:
             for area, suffix in areas.items():
                 stats = evaluate_box_proposals(
-                    predictions, dataset, area=area, limit=limit
+                    predictions, dataset, area=area, limit=limit, posetrack_eval=posetrack_eval
                 )
                 key = "AR{}@{:d}".format(suffix, limit)
                 res.results["box_proposal"][key] = stats["ar"].item()
@@ -41,13 +42,13 @@ def do_coco_evaluation(
     coco_results = {}
     if "bbox" in iou_types:
         logger.info("Preparing bbox results")
-        coco_results["bbox"] = prepare_for_coco_detection(predictions, dataset)
+        coco_results["bbox"] = prepare_for_coco_detection(predictions, dataset, posetrack_eval)
     if "segm" in iou_types:
         logger.info("Preparing segm results")
-        coco_results["segm"] = prepare_for_coco_segmentation(predictions, dataset)
+        coco_results["segm"] = prepare_for_coco_segmentation(predictions, dataset, posetrack_eval)
     if 'keypoints' in iou_types:
         logger.info('Preparing keypoints results')
-        coco_results['keypoints'] = prepare_for_coco_keypoint(predictions, dataset)
+        coco_results['keypoints'] = prepare_for_coco_keypoint(predictions, dataset, posetrack_eval)
 
     results = COCOResults(*iou_types)
     logger.info("Evaluating predictions")
@@ -56,10 +57,23 @@ def do_coco_evaluation(
             file_path = f.name
             if output_folder:
                 file_path = os.path.join(output_folder, iou_type + ".json")
-            res = evaluate_predictions_on_coco(
-                dataset.coco, coco_results[iou_type], file_path, iou_type
-            )
-            results.update(res)
+            if not posetrack_eval:
+                res = evaluate_predictions_on_coco(
+                    dataset.coco, coco_results[iou_type], file_path, iou_type
+                )
+            else:
+                file_paths = []
+                if output_folder:
+                    for idx in range(len(dataset.coco_objs)):
+                        file_path = os.path.join(output_folder, iou_type + "_" + str(idx) + ".json")
+                        file_paths.append(file_path)
+                res = evaluate_predictions_on_posetrack(
+                    dataset.coco_objs, coco_results[iou_type], file_paths, iou_type
+                )
+            if not posetrack_eval:
+                res = [res]
+            for curr_res in res:
+                results.update(curr_res)
     logger.info(results)
     check_expected_results(results, expected_results, expected_results_sigma_tol)
     if output_folder:
@@ -67,41 +81,62 @@ def do_coco_evaluation(
     return results, coco_results
 
 
-def prepare_for_coco_detection(predictions, dataset):
+def prepare_for_coco_detection(predictions, dataset, posetrack_eval):
     # assert isinstance(dataset, COCODataset)
-    coco_results = []
+    full_coco_results = []
     for image_id, prediction in enumerate(predictions):
-        original_id = dataset.id_to_img_map[image_id]
+        if not posetrack_eval:
+            original_id = [dataset.id_to_img_map[image_id]]
+            prediction = [prediction]
+        else:
+            original_id = dataset.id_to_video_map[image_id]
         if len(prediction) == 0:
             continue
+        coco_results = []
+        for im_id, im_prediction in zip(original_id, prediction):
+            img_info = dataset.get_img_info(image_id)
+            image_width = img_info["width"]
+            image_height = img_info["height"]
+            im_prediction = im_prediction.resize((image_width, image_height))
+            im_prediction = im_prediction.convert("xywh")
 
-        img_info = dataset.get_img_info(image_id)
-        image_width = img_info["width"]
-        image_height = img_info["height"]
-        prediction = prediction.resize((image_width, image_height))
-        prediction = prediction.convert("xywh")
+            boxes = im_prediction.bbox.tolist()
+            scores = im_prediction.get_field("scores").tolist()
+            labels = im_prediction.get_field("labels").tolist()
 
-        boxes = prediction.bbox.tolist()
-        scores = prediction.get_field("scores").tolist()
-        labels = prediction.get_field("labels").tolist()
+            mapped_labels = [dataset.contiguous_category_id_to_json_id[i] for i in labels]
 
-        mapped_labels = [dataset.contiguous_category_id_to_json_id[i] for i in labels]
+            if posetrack_eval:
+                coco_results.extend(
+                    [
+                        {
+                            "image_id": im_id,
+                            "category_id": mapped_labels[k],
+                            "bbox": box,
+                            "score": scores[k],
+                        }
+                        for k, box in enumerate(boxes)
+                    ]
+                )
+            else:
+                full_coco_results.extend(
+                    [
+                        {
+                            "image_id": im_id,
+                            "category_id": mapped_labels[k],
+                            "bbox": box,
+                            "score": scores[k],
+                        }
+                        for k, box in enumerate(boxes)
+                    ]
+                )
+        if posetrack_eval:
+            full_coco_results.append(coco_results)
 
-        coco_results.extend(
-            [
-                {
-                    "image_id": original_id,
-                    "category_id": mapped_labels[k],
-                    "bbox": box,
-                    "score": scores[k],
-                }
-                for k, box in enumerate(boxes)
-            ]
-        )
-    return coco_results
+    return full_coco_results
 
 
-def prepare_for_coco_segmentation(predictions, dataset):
+def prepare_for_coco_segmentation(predictions, dataset, posetrack_eval):
     import pycocotools.mask as mask_util
     import numpy as np
 
@@ -155,39 +190,56 @@ def prepare_for_coco_segmentation(predictions, dataset):
     return coco_results
 
 
-def prepare_for_coco_keypoint(predictions, dataset):
+def prepare_for_coco_keypoint(predictions, dataset, posetrack_eval):
     # assert isinstance(dataset, COCODataset)
-    coco_results = []
+    full_coco_results = []
     for image_id, prediction in enumerate(predictions):
-        original_id = dataset.id_to_img_map[image_id]
-        if len(prediction.bbox) == 0:
-            continue
-
+        if not posetrack_eval:
+            original_id = [dataset.id_to_img_map[image_id]]
+            prediction = [prediction]
+        else:
+            original_id = dataset.id_to_video_map[image_id]
+ 
         # TODO replace with get_img_info?
-        image_width = dataset.coco.imgs[original_id]['width']
-        image_height = dataset.coco.imgs[original_id]['height']
-        prediction = prediction.resize((image_width, image_height))
-        prediction = prediction.convert('xywh')
+        coco_results = []
+        for im_id, im_prediction in zip(original_id, prediction):
+            if len(im_prediction.bbox) == 0:
+                continue
+            img_info = dataset.get_img_info(image_id)
+            image_width = img_info['width']
+            image_height = img_info['height']
+            im_prediction = im_prediction.resize((image_width, image_height))
+            im_prediction = im_prediction.convert('xywh')
 
-        boxes = prediction.bbox.tolist()
-        scores = prediction.get_field('scores').tolist()
-        labels = prediction.get_field('labels').tolist()
-        keypoints = prediction.get_field('keypoints')
-        keypoints = keypoints.resize((image_width, image_height))
-        keypoints = keypoints.keypoints.view(keypoints.keypoints.shape[0], -1).tolist()
+            boxes = im_prediction.bbox.tolist()
+            scores = im_prediction.get_field('scores').tolist()
+            labels = im_prediction.get_field('labels').tolist()
+            keypoints = im_prediction.get_field('keypoints')
+            keypoints = keypoints.resize((image_width, image_height))
+            keypoints = keypoints.keypoints.view(keypoints.keypoints.shape[0], -1).tolist()
 
-        mapped_labels = [dataset.contiguous_category_id_to_json_id[i] for i in labels]
+            mapped_labels = [dataset.contiguous_category_id_to_json_id[i] for i in labels]
+            if posetrack_eval:
+                coco_results.extend([{
+                    'image_id': im_id,
+                    'category_id': mapped_labels[k],
+                    'keypoints': keypoint,
+                    'score': scores[k]} for k, keypoint in enumerate(keypoints)])
+            else:
+                full_coco_results.extend([{
+                    'image_id': im_id,
+                    'category_id': mapped_labels[k],
+                    'keypoints': keypoint,
+                    'score': scores[k]} for k, keypoint in enumerate(keypoints)])
 
-        coco_results.extend([{
-            'image_id': original_id,
-            'category_id': mapped_labels[k],
-            'keypoints': keypoint,
-            'score': scores[k]} for k, keypoint in enumerate(keypoints)])
-    return coco_results
+        if posetrack_eval:
+            full_coco_results.append(coco_results)
+
+    return full_coco_results
 
 # inspired from Detectron
 def evaluate_box_proposals(
-    predictions, dataset, thresholds=None, area="all", limit=None
+    predictions, dataset, thresholds=None, area="all", limit=None, posetrack_eval=False
 ):
     """Evaluate detection proposal recall metrics. This function is a much
     faster alternative to the official COCO API recall evaluation code. However,
@@ -221,7 +273,10 @@ def evaluate_box_proposals(
     num_pos = 0
 
     for image_id, prediction in enumerate(predictions):
-        original_id = dataset.id_to_img_map[image_id]
+        if not posetrack_eval:
+            original_id = dataset.id_to_img_map[image_id]
+        else:
+            original_id = dataset.id_to_video_map[image_id]
 
         img_info = dataset.get_img_info(image_id)
         image_width = img_info["width"]
@@ -301,6 +356,51 @@ def evaluate_box_proposals(
         "num_pos": num_pos,
     }
 
+
+def evaluate_predictions_on_posetrack(
+    coco_gts, coco_results, json_result_files, iou_type="bbox"
+):
+    import numpy as np
+    import json
+
+    # for testing purposes only
+    coco_gts = coco_gts[:5]
+    json_result_files = json_result_files[:5]
+
+    for json_result_file, coco_result in zip(json_result_files, coco_results):
+        with open(json_result_file, "w") as f:
+            json.dump(coco_result, f)
+
+    from pycocotools.coco import COCO
+    from pycocotools.cocoeval import COCOeval
+
+    coco_evals = []
+    for coco_gt, json_result_file, coco_result in zip(coco_gts, json_result_files, coco_results):
+        for idx in coco_gt.anns:
+            if iou_type == "bbox":
+                bb = coco_gt.anns[idx]['bbox']
+                coco_gt.anns[idx]['iscrowd'] = 0
+                coco_gt.anns[idx]['area'] = bb[2]*bb[3]
+            if iou_type == "keypoints":
+                s = coco_gt.anns[idx]['keypoints']
+                x = s[0::3]
+                y = s[1::3]
+                v = s[2::3]
+                num_keypoints = v.count(1)
+                x0,x1,y0,y1 = np.min(x), np.max(x), np.min(y), np.max(y)
+                coco_gt.anns[idx]['area'] = (x1-x0)*(y1-y0)
+                coco_gt.anns[idx]['bbox'] = [x0,y0,x1-x0,y1-y0]
+                coco_gt.anns[idx]['num_keypoints'] = num_keypoints
+        #print(coco_result)
+        #print(coco_gt.anns)
+        coco_dt = coco_gt.loadRes(str(json_result_file)) if coco_result else COCO()
+        # coco_dt = coco_gt.loadRes(coco_results)
+        coco_eval = COCOeval(coco_gt, coco_dt, iou_type)
+        coco_eval.evaluate()
+        coco_eval.accumulate()
+        coco_eval.summarize()
+        coco_evals.append(coco_eval)
+    return coco_evals
 
 def evaluate_predictions_on_coco(
     coco_gt, coco_results, json_result_file, iou_type="bbox"

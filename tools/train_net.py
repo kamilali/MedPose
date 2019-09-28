@@ -11,6 +11,7 @@ import argparse
 import os
 
 import torch
+import numpy as np
 from maskrcnn_benchmark.config import cfg
 from maskrcnn_benchmark.data import make_data_loader
 from maskrcnn_benchmark.solver import make_lr_scheduler
@@ -34,6 +35,12 @@ except ImportError:
 
 
 def train(cfg, local_rank, distributed):
+    # steps to produce deterministic results
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(0)
+    torch.manual_seed(0)
+
     model = build_detection_model(cfg)
     device = torch.device(cfg.MODEL.DEVICE)
     model.to(device)
@@ -50,7 +57,7 @@ def train(cfg, local_rank, distributed):
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[local_rank], output_device=local_rank,
             # this should be removed if we update BatchNorm stats
-            broadcast_buffers=False,
+            # broadcast_buffers=False,
         )
 
     arguments = {}

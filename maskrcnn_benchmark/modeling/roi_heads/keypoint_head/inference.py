@@ -6,31 +6,68 @@ class KeypointPostProcessor(nn.Module):
     def __init__(self, keypointer=None):
         super(KeypointPostProcessor, self).__init__()
         self.keypointer = keypointer
+        self.posetrack = self.keypointer.posetrack
 
     def forward(self, x, boxes):
         mask_prob = x
 
         scores = None
         if self.keypointer:
-            mask_prob, scores = self.keypointer(x, boxes)
+            if not self.posetrack:
+                mask_prob, scores = self.keypointer(x, boxes)
+            else:
+                mask_probs = []
+                scores = []
+                fin = False
+                b_idx = 0
+                c_idx = 0
+                while not fin:
+                    box = boxes[b_idx]
+                    mask_prob, score = self.keypointer(x[c_idx:(c_idx + box.bbox.size(0))], [box])
+                    mask_probs.append(mask_prob)
+                    scores.append(score)
+                    c_idx += box.bbox.size(0)
+                    b_idx += 1
+                    if b_idx >= len(boxes):
+                        fin = True
 
-        assert len(boxes) == 1, "Only non-batched inference supported for now"
-        boxes_per_image = [box.bbox.size(0) for box in boxes]
-        mask_prob = mask_prob.split(boxes_per_image, dim=0)
-        scores = scores.split(boxes_per_image, dim=0)
+        if not self.posetrack:
+            assert len(boxes) == 1, "Only non-batched inference supported for now"
 
-        results = []
-        for prob, box, score in zip(mask_prob, boxes, scores):
-            bbox = BoxList(box.bbox, box.size, mode="xyxy")
-            for field in box.fields():
-                bbox.add_field(field, box.get_field(field))
-            prob = PersonKeypoints(prob, box.size)
-            prob.add_field("logits", score)
-            bbox.add_field("keypoints", prob)
-            results.append(bbox)
+            boxes_per_image = [box.bbox.size(0) for box in boxes]
+            mask_prob = mask_prob.split(boxes_per_image, dim=0)
+            scores = scores.split(boxes_per_image, dim=0)
+            results = []
+            for prob, box, score in zip(mask_prob, boxes, scores):
+                bbox = BoxList(box.bbox, box.size, mode="xyxy")
+                for field in box.fields():
+                    bbox.add_field(field, box.get_field(field))
+                prob = PersonKeypoints(prob, box.size)
+                prob.add_field("logits", score)
+                bbox.add_field("keypoints", prob)
+                results.append(bbox)
 
-        return results
-
+            return results
+        else:
+            b_idx = 0
+            frame_results = []
+            for mask_prob, curr_boxes, score in zip(mask_probs, boxes, scores):
+                curr_boxes = [curr_boxes]
+                boxes_per_image = [box.bbox.size(0) for box in curr_boxes]
+                mask_prob = mask_prob.split(boxes_per_image, dim=0)
+                score = score.split(boxes_per_image, dim=0)
+                # get results
+                results = []
+                for prob, box, score in zip(mask_prob, curr_boxes, score):
+                    bbox = BoxList(box.bbox, box.size, mode="xyxy")
+                    for field in box.fields():
+                        bbox.add_field(field, box.get_field(field))
+                    prob = PersonKeypoints(prob, box.size)
+                    prob.add_field("logits", score)
+                    bbox.add_field("keypoints", prob)
+                    results.append(bbox) 
+                frame_results.append(results)
+            return frame_results
 
 # TODO remove and use only the Keypointer
 import numpy as np
@@ -104,14 +141,17 @@ class Keypointer(object):
     specified by the bounding boxes
     """
 
-    def __init__(self, padding=0):
+    def __init__(self, padding=0, posetrack=False):
         self.padding = padding
+        self.posetrack = posetrack
 
     def __call__(self, masks, boxes):
         # TODO do this properly
         if isinstance(boxes, BoxList):
             boxes = [boxes]
-        assert len(boxes) == 1
+
+        if not self.posetrack:
+            assert len(boxes) == 1
 
         result, scores = heatmaps_to_keypoints(
             masks.detach().cpu().numpy(), boxes[0].bbox.cpu().numpy()
@@ -120,6 +160,6 @@ class Keypointer(object):
 
 
 def make_roi_keypoint_post_processor(cfg):
-    keypointer = Keypointer()
+    keypointer = Keypointer(posetrack=cfg.POSETRACK_EVAL)
     keypoint_post_processor = KeypointPostProcessor(keypointer)
     return keypoint_post_processor

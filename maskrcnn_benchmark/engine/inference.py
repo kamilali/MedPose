@@ -21,6 +21,8 @@ def compute_on_dataset(model, data_loader, device, timer=None):
     cpu_device = torch.device("cpu")
     for _, batch in enumerate(tqdm(data_loader)):
         images, targets, image_ids = batch
+        if isinstance(images, list) and len(images) == 0:
+            break
         with torch.no_grad():
             if timer:
                 timer.tic()
@@ -32,10 +34,26 @@ def compute_on_dataset(model, data_loader, device, timer=None):
                 if not cfg.MODEL.DEVICE == 'cpu':
                     torch.cuda.synchronize()
                 timer.toc()
-            output = [o.to(cpu_device) for o in output]
-        results_dict.update(
-            {img_id: result for img_id, result in zip(image_ids, output)}
-        )
+            if not cfg.POSETRACK_EVAL:
+                output = [o.to(cpu_device) for o in output]
+            else:
+                outputs = output
+                for idx, output in enumerate(outputs):
+                    output = [o.to(cpu_device) for o in output]
+                    outputs[idx] = output
+        if not cfg.POSETRACK_EVAL:
+            results_dict.update(
+                {img_id: result for img_id, result in zip(image_ids, output)}
+            )
+        else:
+            item = {}
+            for output in outputs:
+                for img_id, result in zip(image_ids, output):
+                    if img_id in item:
+                        item[img_id].append(result)
+                    else:
+                        item[img_id] = [result]
+            results_dict.update(item)
     return results_dict
 
 
@@ -101,6 +119,7 @@ def inference(
     )
 
     predictions = _accumulate_predictions_from_multiple_gpus(predictions)
+
     if not is_main_process():
         return
 
@@ -112,6 +131,7 @@ def inference(
         iou_types=iou_types,
         expected_results=expected_results,
         expected_results_sigma_tol=expected_results_sigma_tol,
+        posetrack_eval=cfg.POSETRACK_EVAL,
     )
 
     return evaluate(dataset=dataset,

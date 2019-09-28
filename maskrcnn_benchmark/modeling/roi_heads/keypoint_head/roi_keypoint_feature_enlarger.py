@@ -28,7 +28,7 @@ class KeypointRCNNFeatureEnlarger(nn.Module):
             self.blocks.append(layer_name)
         self.out_channels = layer_features
 
-    def forward(self, x, proposals):
+    def forward(self, x):
         for layer_name in self.blocks:
             x = F.relu(getattr(self, layer_name)(x))
         return x
