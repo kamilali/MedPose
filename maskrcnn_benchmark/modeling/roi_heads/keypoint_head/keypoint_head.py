@@ -117,6 +117,8 @@ class ROIKeypointHead(torch.nn.Module):
                 residual_connection = self.conv_fcn1(x)
                 kp_logits = self.heatmap_builder(residual_connection)
             else:
+                if vid_shape is None:
+                    vid_shape = [1, 1]
                 proposals = [proposals[(i * vid_shape[1]):(i * vid_shape[1] + vid_shape[1])] for i in range(vid_shape[0])]
                 # we iterate by seq x batch_len
                 proposals = list(zip(*proposals))
@@ -166,8 +168,9 @@ class ROIKeypointHead(torch.nn.Module):
         if not self.training:
             result = self.post_processor(kp_logits, proposals)
             return x, result, {}
+
+        loss_kp = self.loss_evaluator(proposals, kp_logits)
         
-        print("GOT HERE...")
         return x, proposals, dict(loss_kp=loss_kp)
 
 

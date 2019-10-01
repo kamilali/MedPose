@@ -376,11 +376,18 @@ def evaluate_predictions_on_posetrack(
 
     coco_evals = []
     for coco_gt, json_result_file, coco_result in zip(coco_gts, json_result_files, coco_results):
+        load_allowed = False
         for idx in coco_gt.anns:
             if iou_type == "bbox":
-                bb = coco_gt.anns[idx]['bbox']
-                coco_gt.anns[idx]['iscrowd'] = 0
-                coco_gt.anns[idx]['area'] = bb[2]*bb[3]
+                if 'bbox' in coco_gt.anns[idx]:
+                    bb = coco_gt.anns[idx]['bbox']
+                    coco_gt.anns[idx]['iscrowd'] = 0
+                    coco_gt.anns[idx]['area'] = bb[2]*bb[3]
+                    load_allowed = True
+                else:
+                    print('could not find relevant bbox annotation... skipping')
+                    load_allowed = False
+                    break
             if iou_type == "keypoints":
                 s = coco_gt.anns[idx]['keypoints']
                 x = s[0::3]
@@ -391,15 +398,18 @@ def evaluate_predictions_on_posetrack(
                 coco_gt.anns[idx]['area'] = (x1-x0)*(y1-y0)
                 coco_gt.anns[idx]['bbox'] = [x0,y0,x1-x0,y1-y0]
                 coco_gt.anns[idx]['num_keypoints'] = num_keypoints
-        #print(coco_result)
-        #print(coco_gt.anns)
-        coco_dt = coco_gt.loadRes(str(json_result_file)) if coco_result else COCO()
-        # coco_dt = coco_gt.loadRes(coco_results)
-        coco_eval = COCOeval(coco_gt, coco_dt, iou_type)
-        coco_eval.evaluate()
-        coco_eval.accumulate()
-        coco_eval.summarize()
-        coco_evals.append(coco_eval)
+        if load_allowed:
+            #print(coco_result)
+            #print(coco_gt.anns)
+            coco_dt = coco_gt.loadRes(str(json_result_file)) if coco_result else COCO()
+            # coco_dt = coco_gt.loadRes(coco_results)
+            coco_eval = COCOeval(coco_gt, coco_dt, iou_type)
+            coco_eval.evaluate()
+            coco_eval.accumulate()
+            coco_eval.summarize()
+            coco_evals.append(coco_eval)
+        else:
+            print("skipped")
     return coco_evals
 
 def evaluate_predictions_on_coco(

@@ -80,7 +80,7 @@ class PoseTrackDataset(torch.utils.data.Dataset):
                         continue
 
             # just 10 frames of a video are used currently
-            seq_len = 3
+            seq_len = 1
             posetrack_image_ids = posetrack_image_ids[0:seq_len]
             posetrack_annotations = posetrack_annotations[0:seq_len]
 
