@@ -15,6 +15,10 @@ from maskrcnn_benchmark import layers
 
 from .utils import cat
 
+from PIL import Image
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
 class ROIKeypointHead(torch.nn.Module):
     def __init__(self, cfg, in_channels):
         super(ROIKeypointHead, self).__init__()
@@ -110,8 +114,7 @@ class ROIKeypointHead(torch.nn.Module):
         if self.cfg.MODEL.MEDPOSE_ON:
             preds = []
             loss_proposals = proposals
-            ablation = False # if we are ablating, this flag is set to true
-            if ablation:
+            if self.cfg.MODEL.MEDPOSE_ABLATION:
                 # not using encoder output, simply passing the residual connection through the heatmap builder
                 x = self.feature_extractor(features, proposals)
                 residual_connection = self.conv_fcn1(x)
@@ -176,3 +179,43 @@ class ROIKeypointHead(torch.nn.Module):
 
 def build_roi_keypoint_head(cfg, in_channels):
     return ROIKeypointHead(cfg, in_channels)
+
+def visualize(image, boxes=None, keypoints=None):
+    fig, ax = plt.subplots(1)
+    ax.imshow(image[0].detach().cpu().numpy())
+    if boxes is not None or keypoints is not None:
+        if boxes is None:
+            enumerable = keypoints
+        elif keypoints is None:
+            enumerable = boxes
+        else:
+            enumerable = zip(boxes, keypoints)
+        for testing in enumerable:
+            if boxes is not None and keypoints is not None:
+                box = testing[0]
+                if not isinstance(testing[1], list):
+                    keypoint = testing[1].keypoints.squeeze(dim=1)
+                else:
+                    keypoint = testing[1]
+            elif boxes is not None:
+                box = testing
+            else:
+                keypoint = testing
+            if keypoints is not None:
+                x = keypoint[0::3]
+                y = keypoint[1::3]
+                v = keypoint[2::3]
+                temp_x, temp_y = [], []
+                for l in range(len(v)):
+                    if v[l] > 0:
+                        temp_x.append(x[l])
+                        temp_y.append(y[l])
+                x = temp_x
+                y = temp_y
+            if boxes is not None:
+                rect = patches.Rectangle((box[0], box[1]),box[2], box[3],linewidth=1,edgecolor='r',facecolor='none')
+                ax.add_patch(rect)
+            if keypoints is not None:
+                plt.scatter(x, y)
+    plt.show()
+    plt.close()

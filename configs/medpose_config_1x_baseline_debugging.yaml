@@ -1,0 +1,60 @@
+MODEL:
+  META_ARCHITECTURE: "GeneralizedRCNN"
+  WEIGHT: "catalog://ImageNetPretrained/MSRA/R-50"
+  BACKBONE:
+    CONV_BODY: "R-50-FPN"
+  RESNETS:
+    BACKBONE_OUT_CHANNELS: 256
+  RPN:
+    USE_FPN: True
+    ANCHOR_STRIDE: (4, 8, 16, 32, 64)
+    PRE_NMS_TOP_N_TRAIN: 2000
+    PRE_NMS_TOP_N_TEST: 1000
+    POST_NMS_TOP_N_TEST: 1000
+    FPN_POST_NMS_TOP_N_TEST: 1000
+  ROI_HEADS:
+    USE_FPN: True
+  ROI_BOX_HEAD:
+    POOLER_RESOLUTION: 7
+    POOLER_SCALES: (0.25, 0.125, 0.0625, 0.03125)
+    POOLER_SAMPLING_RATIO: 2
+    FEATURE_EXTRACTOR: "FPN2MLPFeatureExtractor"
+    PREDICTOR: "FPNPredictor"
+    NUM_CLASSES: 2
+  ROI_KEYPOINT_HEAD:
+    POOLER_SCALES: (0.25, 0.125, 0.0625, 0.03125)
+    FEATURE_EXTRACTOR: "KeypointRCNNFeatureExtractor"
+    PREDICTOR: "KeypointRCNNPredictor"
+    POOLER_RESOLUTION: 8
+    POOLER_SAMPLING_RATIO: 2
+    RESOLUTION: 32
+    SHARE_BOX_FEATURE_EXTRACTOR: False
+  MEDPOSE:
+    FEATURE_ENLARGER: "KeypointRCNNFeatureEnlarger"
+    HEATMAP_UPSCALE: 2
+    STACK_LAYERS: 4
+    WINDOW_SIZE: 3
+    ROI_MAP_DIM: 8
+    MODEL_DIM: 1088
+    NUM_KEYPOINTS: 17
+  KEYPOINT_ON: True
+  MEDPOSE_ON: True
+  MEDPOSE_ABLATION: False
+DATASETS:
+  TRAIN: ("posetrack_train",) # TRAIN: ("keypoints_coco_2014_train", "keypoints_coco_2014_valminusminival",) #TRAIN: ("keypoints_coco_2017_train", "keypoints_coco_2017_val",)
+  TEST: ("posetrack_val",) # for some reason posetrack_test is not working will debug later
+  #TRAIN: ("keypoints_coco_2014_train", "keypoints_coco_2014_valminusminival",)
+  #TEST: ("keypoints_coco_2014_minival",) #TEST: ("keypoints_coco_2017_test",)
+INPUT:
+  MIN_SIZE_TRAIN: (640, 672, 704, 736, 768, 800)
+DATALOADER:
+  SIZE_DIVISIBILITY: 32
+  NUM_WORKERS: 0
+SOLVER:
+  BASE_LR: 0.01
+  WEIGHT_DECAY: 0.0001
+  STEPS: (120000, 160000)
+  MAX_ITER: 180000
+OUTPUT_DIR: "/scratch/users/kamilali/medpose-model-data/models_baseline_w_posetrack"
+NUM_GPUS: 2
+POSETRACK_EVAL: True

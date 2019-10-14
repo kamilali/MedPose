@@ -58,12 +58,12 @@ class KeypointPostProcessor(nn.Module):
                 score = score.split(boxes_per_image, dim=0)
                 # get results
                 results = []
-                for prob, box, score in zip(mask_prob, curr_boxes, score):
+                for prob, box, s in zip(mask_prob, curr_boxes, score):
                     bbox = BoxList(box.bbox, box.size, mode="xyxy")
                     for field in box.fields():
                         bbox.add_field(field, box.get_field(field))
                     prob = PersonKeypoints(prob, box.size)
-                    prob.add_field("logits", score)
+                    prob.add_field("logits", s)
                     bbox.add_field("keypoints", prob)
                     results.append(bbox) 
                 frame_results.append(results)

@@ -9,6 +9,9 @@ from maskrcnn_benchmark.modeling.roi_heads.mask_head.inference import Masker
 from maskrcnn_benchmark.structures.bounding_box import BoxList
 from maskrcnn_benchmark.structures.boxlist_ops import boxlist_iou
 
+from PIL import Image
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 def do_coco_evaluation(
     dataset,
@@ -61,6 +64,7 @@ def do_coco_evaluation(
                 res = evaluate_predictions_on_coco(
                     dataset.coco, coco_results[iou_type], file_path, iou_type
                 )
+                results.update(res)
             else:
                 file_paths = []
                 if output_folder:
@@ -68,12 +72,9 @@ def do_coco_evaluation(
                         file_path = os.path.join(output_folder, iou_type + "_" + str(idx) + ".json")
                         file_paths.append(file_path)
                 res = evaluate_predictions_on_posetrack(
-                    dataset.coco_objs, coco_results[iou_type], file_paths, iou_type
+                    dataset.coco_objs, coco_results[iou_type], file_paths, dataset.del_idxs, iou_type
                 )
-            if not posetrack_eval:
-                res = [res]
-            for curr_res in res:
-                results.update(curr_res)
+                results.update(res)
     logger.info(results)
     check_expected_results(results, expected_results, expected_results_sigma_tol)
     if output_folder:
@@ -90,8 +91,7 @@ def prepare_for_coco_detection(predictions, dataset, posetrack_eval):
             prediction = [prediction]
         else:
             original_id = dataset.id_to_video_map[image_id]
-        if len(prediction) == 0:
-            continue
+            #original_coco = dataset.coco_objs[image_id]
         coco_results = []
         for im_id, im_prediction in zip(original_id, prediction):
             img_info = dataset.get_img_info(image_id)
@@ -107,6 +107,10 @@ def prepare_for_coco_detection(predictions, dataset, posetrack_eval):
             mapped_labels = [dataset.contiguous_category_id_to_json_id[i] for i in labels]
 
             if posetrack_eval:
+                #curr_frame = original_coco.loadImgs(im_id)[0]
+                #curr_frame = Image.open(os.path.join('datasets/posetrack', curr_frame['file_name'])).convert("RGB")
+                #visualize(curr_frame, boxes, None)
+                #exit()
                 coco_results.extend(
                     [
                         {
@@ -199,6 +203,7 @@ def prepare_for_coco_keypoint(predictions, dataset, posetrack_eval):
             prediction = [prediction]
         else:
             original_id = dataset.id_to_video_map[image_id]
+            #original_coco = dataset.coco_objs[image_id]
  
         # TODO replace with get_img_info?
         coco_results = []
@@ -220,6 +225,10 @@ def prepare_for_coco_keypoint(predictions, dataset, posetrack_eval):
 
             mapped_labels = [dataset.contiguous_category_id_to_json_id[i] for i in labels]
             if posetrack_eval:
+                # curr_frame = original_coco.loadImgs(im_id)[0]
+                # curr_frame = Image.open(os.path.join('datasets/posetrack', curr_frame['file_name'])).convert("RGB")
+                # visualize(curr_frame, None, keypoints)
+                # exit()
                 coco_results.extend([{
                     'image_id': im_id,
                     'category_id': mapped_labels[k],
@@ -358,25 +367,33 @@ def evaluate_box_proposals(
 
 
 def evaluate_predictions_on_posetrack(
-    coco_gts, coco_results, json_result_files, iou_type="bbox"
+    coco_gts, coco_results, json_result_files, del_idxs, iou_type="bbox"
 ):
     import numpy as np
     import json
 
+    from pycocotools.coco import COCO
+    from pycocotools.cocoeval import COCOeval
+
+    print(coco_gts[0].anns)
+    exit()
+
+    coco_evals = []
+    total_coco_gt, total_coco_dt = None, None
+    coco_gts = [coco_gts[i] for i in range(len(coco_gts)) if i not in del_idxs]
+    json_result_files = [json_result_files[i] for i in range(len(json_result_files)) if i not in del_idxs]
+    coco_results = [coco_results[i] for i in range(len(coco_results)) if i not in del_idxs]
+    
     # for testing purposes only
-    coco_gts = coco_gts[:5]
-    json_result_files = json_result_files[:5]
+    #coco_gts = coco_gts[:5]
+    #json_result_files = json_result_files[:5]
 
     for json_result_file, coco_result in zip(json_result_files, coco_results):
         with open(json_result_file, "w") as f:
             json.dump(coco_result, f)
-
-    from pycocotools.coco import COCO
-    from pycocotools.cocoeval import COCOeval
-
-    coco_evals = []
-    for coco_gt, json_result_file, coco_result in zip(coco_gts, json_result_files, coco_results):
-        load_allowed = False
+    
+    for curr_idx, (coco_gt, json_result_file, coco_result) in enumerate(zip(coco_gts, json_result_files, coco_results)):
+        load_allowed = True
         for idx in coco_gt.anns:
             if iou_type == "bbox":
                 if 'bbox' in coco_gt.anns[idx]:
@@ -398,19 +415,80 @@ def evaluate_predictions_on_posetrack(
                 coco_gt.anns[idx]['area'] = (x1-x0)*(y1-y0)
                 coco_gt.anns[idx]['bbox'] = [x0,y0,x1-x0,y1-y0]
                 coco_gt.anns[idx]['num_keypoints'] = num_keypoints
+                coco_gt.anns[idx]['iscrowd'] = 0
         if load_allowed:
-            #print(coco_result)
-            #print(coco_gt.anns)
             coco_dt = coco_gt.loadRes(str(json_result_file)) if coco_result else COCO()
-            # coco_dt = coco_gt.loadRes(coco_results)
-            coco_eval = COCOeval(coco_gt, coco_dt, iou_type)
-            coco_eval.evaluate()
-            coco_eval.accumulate()
-            coco_eval.summarize()
-            coco_evals.append(coco_eval)
+            #coco_dt = coco_gt.loadRes(coco_results)
+            # print(len(coco_dt.dataset), len(coco_dt.dataset))
+            # print(coco_gt.dataset.keys(), coco_dt.dataset.keys(), "dataset")
+            # print(len(coco_gt.anns), len(coco_dt.anns))
+            # print(coco_gt.anns.keys(), coco_dt.anns.keys(), "annotations")
+            # print(len(coco_gt.cats), len(coco_dt.cats))
+            # print(coco_gt.cats.keys(), coco_dt.cats.keys(), "categories")
+            # print(len(coco_gt.imgs), len(coco_dt.imgs))
+            # print(coco_gt.imgs.keys(), coco_dt.imgs.keys(), "images")
+            # if iou_type == 'keypoints':
+            #     for gt_key, dt_key in zip(coco_gt.anns.keys(), coco_dt.anns.keys()):
+            #         print(gt_key, dt_key)
+            #         print(coco_gt.anns[gt_key])
+            #         print(coco_dt.anns[dt_key])
+            #         image_id = coco_dt.anns[dt_key]['image_id']
+            #         other_image_id = coco_gt.anns[gt_key]['image_id']
+            #         bbox = coco_dt.anns[dt_key]['bbox']
+            #         keypoints = coco_dt.anns[dt_key]['keypoints']
+            #         other_bbox = coco_gt.anns[gt_key]['bbox']
+            #         other_keypoints = coco_gt.anns[gt_key]['keypoints']
+            #         img = coco_gt.loadImgs(ids=image_id)[0]
+            #         other_img = coco_gt.loadImgs(ids=other_image_id)[0]
+            #         print(img['file_name'])
+            #         img = Image.open(os.path.join('datasets/posetrack', img['file_name'])).convert("RGB")
+            #         other_img = Image.open(os.path.join('datasets/posetrack', other_img['file_name'])).convert("RGB")
+            #         visualize(img, [bbox], [keypoints])
+            #         visualize(other_img, [other_bbox], [other_keypoints])
+            if total_coco_gt is None:
+                total_coco_gt = coco_gt
+            else:
+                total_coco_gt.dataset.update(coco_gt.dataset)
+                total_coco_gt.anns.update(coco_gt.anns)
+                total_coco_gt.cats.update(coco_gt.cats)
+                total_coco_gt.imgs.update(coco_gt.imgs)
+                total_coco_gt.imgToAnns.update(coco_gt.imgToAnns)
+                for cat in coco_gt.catToImgs.keys():
+                    if cat in total_coco_gt.catToImgs:
+                        for gt_img in coco_gt.catToImgs[cat]:
+                            total_coco_gt.catToImgs[cat].append(gt_img)
+                    else:
+                        total_coco_gt.catToImgs[cat] = coco_gt.catToImgs[cat]
+
+            if total_coco_dt is None:
+                total_coco_dt = coco_dt
+            else:
+                total_coco_dt.dataset.update(coco_dt.dataset)
+                total_coco_dt.anns.update(coco_dt.anns)
+                total_coco_dt.cats.update(coco_dt.cats)
+                total_coco_dt.imgs.update(coco_dt.imgs)
+                total_coco_dt.imgToAnns.update(coco_dt.imgToAnns)
+                for cat in coco_dt.catToImgs.keys():
+                    if cat in total_coco_dt.catToImgs:
+                        for dt_img in coco_dt.catToImgs[cat]:
+                            total_coco_dt.catToImgs[cat].append(dt_img)
+                    else:
+                        total_coco_dt.catToImgs[cat] = coco_dt.catToImgs[cat]
+            
+            #coco_eval = COCOeval(coco_gt, coco_dt, iou_type)
+            #coco_eval.evaluate()
+            #coco_eval.accumulate()
+            #coco_eval.summarize()
+            #coco_evals.append(coco_eval)
         else:
             print("skipped")
-    return coco_evals
+   
+    coco_eval = COCOeval(total_coco_gt, total_coco_dt, iou_type)
+    coco_eval.evaluate()
+    coco_eval.accumulate()
+    coco_eval.summarize()
+    #exit()
+    return coco_eval
 
 def evaluate_predictions_on_coco(
     coco_gt, coco_results, json_result_file, iou_type="bbox"
@@ -422,7 +500,7 @@ def evaluate_predictions_on_coco(
 
     from pycocotools.coco import COCO
     from pycocotools.cocoeval import COCOeval
-
+    
     coco_dt = coco_gt.loadRes(str(json_result_file)) if coco_results else COCO()
 
     # coco_dt = coco_gt.loadRes(coco_results)
@@ -504,3 +582,43 @@ def check_expected_results(results, expected_results, sigma_tol):
         else:
             msg = "PASS: " + msg
             logger.info(msg)
+
+def visualize(image, boxes=None, keypoints=None):
+    fig, ax = plt.subplots(1)
+    ax.imshow(image)
+    if boxes is not None or keypoints is not None:
+        if boxes is None:
+            enumerable = keypoints
+        elif keypoints is None:
+            enumerable = boxes
+        else:
+            enumerable = zip(boxes, keypoints)
+        for testing in enumerable:
+            if boxes is not None and keypoints is not None:
+                box = testing[0]
+                if not isinstance(testing[1], list):
+                    keypoint = testing[1].keypoints.squeeze(dim=1)
+                else:
+                    keypoint = testing[1]
+            elif boxes is not None:
+                box = testing
+            else:
+                keypoint = testing
+            if keypoints is not None:
+                x = keypoint[0::3]
+                y = keypoint[1::3]
+                v = keypoint[2::3]
+                temp_x, temp_y = [], []
+                for l in range(len(v)):
+                    if v[l] > 0:
+                        temp_x.append(x[l])
+                        temp_y.append(y[l])
+                x = temp_x
+                y = temp_y
+            if boxes is not None:
+                rect = patches.Rectangle((box[0], box[1]),box[2], box[3],linewidth=1,edgecolor='r',facecolor='none')
+                ax.add_patch(rect)
+            if keypoints is not None:
+                plt.scatter(x, y)
+        plt.show()
+        plt.close()
