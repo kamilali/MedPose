@@ -7,7 +7,7 @@ class MedPoseEncoder(nn.Module):
 
     def __init__(self, num_enc_layers=3, num_att_heads=4, num_lrnn_layers=3, 
             model_dim=1088, lrnn_hidden_dim=1088, ff_hidden_dim=4096, 
-            roi_map_dim=7, lrnn_window_size=3, lrnn_batch_norm=False, enc_history=[], num_keypoints=17, gpus=None, device=None):
+            roi_map_dim=7, lrnn_window_size=3, lrnn_batch_norm=False, use_lrnn=True, enc_history=[], num_keypoints=17, gpus=None, device=None):
         super(MedPoseEncoder, self).__init__()
         '''
         store number of encoder layers and a dictionary containing
@@ -18,9 +18,11 @@ class MedPoseEncoder(nn.Module):
         self.num_enc_layers = num_enc_layers
         self.enc_history = enc_history
 
-        self.local_rnns = nn.ModuleList()
-        self.lrnn_layer_norms = nn.ModuleList()
-        self.lrnn_window_size = lrnn_window_size
+        if use_lrnn:
+            self.local_rnns = nn.ModuleList()
+            self.lrnn_layer_norms = nn.ModuleList()
+            self.lrnn_window_size = lrnn_window_size
+        self.use_lrnn = use_lrnn
 
         self.atts = nn.ModuleList()
         self.att_layer_norms = nn.ModuleList()
@@ -37,19 +39,20 @@ class MedPoseEncoder(nn.Module):
             R-Transformer slightly by using a ConvLSTM instead of a 
             LSTM as the LocalRNN module
             '''
-            local_rnn = MedPoseConvLSTM(
-                    num_layers=num_lrnn_layers, 
-                    input_size=model_dim,
-                    model_size=model_dim,
-                    hidden_size=lrnn_hidden_dim,
-                    batch_first=True,
-                    lrnn_batch_norm=lrnn_batch_norm,
-                    conv2d_req=(enc_layer == 0),
-                    conv1d_req=(enc_layer != 0))
-            self.local_rnns.append(local_rnn)
+            if use_lrnn:
+                local_rnn = MedPoseConvLSTM(
+                        num_layers=num_lrnn_layers, 
+                        input_size=model_dim,
+                        model_size=model_dim,
+                        hidden_size=lrnn_hidden_dim,
+                        batch_first=True,
+                        lrnn_batch_norm=lrnn_batch_norm,
+                        conv2d_req=(enc_layer == 0),
+                        conv1d_req=(enc_layer != 0))
+                self.local_rnns.append(local_rnn)
 
-            lrnn_layer_norm = MedPoseLayerNorm(lrnn_hidden_dim, eps=1e-05)
-            self.lrnn_layer_norms.append(lrnn_layer_norm)
+                lrnn_layer_norm = MedPoseLayerNorm(lrnn_hidden_dim, eps=1e-05)
+                self.lrnn_layer_norms.append(lrnn_layer_norm)
             '''
             Attention mechanism using region features and current context
             to obtain queries and outputs of LocalRNNs to obtain keys and
@@ -85,7 +88,7 @@ class MedPoseEncoder(nn.Module):
             ff_layer_norm = MedPoseLayerNorm(model_dim, eps=1e-05)
             self.ff_layer_norms.append(ff_layer_norm)
     
-    def forward(self, feature_maps, cf_region_features, initial_frame=True, local_rnn=False):
+    def forward(self, feature_maps, cf_region_features, initial_frame=True):
         '''
         apply LocalRNN to small local window to capture local
         structures and only keep the last hidden state representation
@@ -109,7 +112,7 @@ class MedPoseEncoder(nn.Module):
             if enc_layer != 0:
                 enc_in = torch.stack(curr_enc_hist.get_history(enc_layer), dim=1)
                 enc_in = enc_in.permute(0, 1, 3, 2)
-            if local_rnn:
+            if self.use_lrnn:
                 (context, _), residual_connection = self.local_rnns[enc_layer](enc_in)
                 #(context, _), residual_connection = data_parallel(self.local_rnns[enc_layer], enc_in, self.gpus, self.device)
                 #torch.cuda.empty_cache()
@@ -148,7 +151,7 @@ class MedPoseEncoder(nn.Module):
             else:
                 # use output of previous layer as query as well (self-attention?)
                 query = enc_in[:,-1].permute(0, 2, 1).contiguous()
-            if local_rnn:
+            if self.use_lrnn:
                 context = curr_enc_hist.get_lrnn_history(enc_layer)
             else:
                 context = enc_in

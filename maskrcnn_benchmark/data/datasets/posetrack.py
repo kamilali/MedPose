@@ -84,10 +84,11 @@ class PoseTrackDataset(torch.utils.data.Dataset):
                         continue
 
             #seq_len = len(posetrack_image_ids)
-            seq_len = 10 # just 10 frames of a video are used currently to test
             # just 5 frames of a video are used currently to train
             if is_train:
                 seq_len = 5
+            else:
+                seq_len = 15
             posetrack_image_ids = posetrack_image_ids[0:seq_len]
             posetrack_annotations = posetrack_annotations[0:seq_len]
 

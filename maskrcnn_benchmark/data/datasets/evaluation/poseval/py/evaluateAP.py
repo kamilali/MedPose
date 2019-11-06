@@ -3,8 +3,8 @@ import json
 import os
 import sys
 
-import eval_helpers
-from eval_helpers import Joint
+import maskrcnn_benchmark.data.datasets.evaluation.poseval.py.eval_helpers as eval_helpers
+from maskrcnn_benchmark.data.datasets.evaluation.poseval.py.eval_helpers import Joint
 
 def computeMetrics(scoresAll, labelsAll, nGTall):
     apAll = np.zeros((nGTall.shape[0] + 1, 1))
@@ -35,7 +35,7 @@ def computeMetrics(scoresAll, labelsAll, nGTall):
     return apAll, preAll, recAll
 
 
-def evaluateAP(gtFramesAll, prFramesAll, outputDir, bSaveAll=True, bSaveSeq=False):
+def evaluateAP(gtFramesAll, prFramesAll, outputDir=None, bSaveAll=True, bSaveSeq=False):
 
     distThresh = 0.5
 
@@ -77,10 +77,10 @@ def evaluateAP(gtFramesAll, prFramesAll, outputDir, bSaveAll=True, bSaveSeq=Fals
 
     # compute average precision (AP), precision and recall per part
     apAll, preAll, recAll = computeMetrics(scoresAll, labelsAll, nGTall)
-    if (bSaveAll):
-        metrics = {'ap': apAll.flatten().tolist(), 'pre': preAll.flatten().tolist(), 'rec': recAll.flatten().tolist(),  'names': names}
-        filename = outputDir + '/total_AP_metrics.json'
-        print('saving results to', filename)
-        eval_helpers.writeJson(metrics,filename)
+    # if (bSaveAll and outputDir):
+    #     metrics = {'ap': apAll.flatten().tolist(), 'pre': preAll.flatten().tolist(), 'rec': recAll.flatten().tolist(),  'names': names}
+    #     filename = outputDir + '/total_AP_metrics.json'
+    #     print('saving results to', filename)
+    #     eval_helpers.writeJson(metrics,filename)
 
     return apAll, preAll, recAll

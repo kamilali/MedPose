@@ -12,7 +12,7 @@ import click
 import numpy as np
 import tqdm
 
-from posetrack18_id2fname import posetrack18_fname2id, posetrack18_id2fname
+from maskrcnn_benchmark.data.datasets.evaluation.poseval.py.posetrack18_id2fname import posetrack18_fname2id, posetrack18_id2fname
 
 LOGGER = logging.getLogger(__name__)
 POSETRACK18_LM_NAMES_COCO_ORDER = [

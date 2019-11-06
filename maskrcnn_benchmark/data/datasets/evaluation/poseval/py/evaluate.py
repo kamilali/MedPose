@@ -4,11 +4,11 @@ import sys
 import numpy as np
 import argparse
 
-from evaluateAP import evaluateAP
-from evaluateTracking import evaluateTracking
+from maskrcnn_benchmark.data.datasets.evaluation.poseval.py.evaluateAP import evaluateAP
+from maskrcnn_benchmark.data.datasets.evaluation.poseval.py.evaluateTracking import evaluateTracking
 
-import eval_helpers
-from eval_helpers import Joint
+import maskrcnn_benchmark.data.datasets.evaluation.poseval.py.eval_helpers
+from maskrcnn_benchmark.data.datasets.evaluation.poseval.py.eval_helpers import Joint
 
 def parseArgs():
 

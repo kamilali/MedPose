@@ -6,7 +6,7 @@ class MedPoseDecoder(nn.Module):
 
     def __init__(self, num_dec_layers=3, num_att_heads=4, num_lrnn_layers=3,
             model_dim=256, lrnn_hidden_dim=256, ff_hidden_dim=1024,
-            roi_map_dim=7, lrnn_window_size=3, num_keypoints=17, dec_history=[], gpus=None, device=None):
+            roi_map_dim=7, lrnn_window_size=3, num_keypoints=17, lrnn_batch_norm=False, use_lrnn=True, dec_history=[], gpus=None, device=None):
         super(MedPoseDecoder, self).__init__()
         '''
         store number of decoder layers and a dictionary containing
@@ -17,9 +17,10 @@ class MedPoseDecoder(nn.Module):
         self.num_dec_layers = num_dec_layers
         self.dec_history = dec_history
 
-        self.local_rnns = nn.ModuleList()
-        self.lrnn_layer_norms = nn.ModuleList()
-        self.lrnn_window_size = lrnn_window_size
+        if use_lrnn:
+            self.local_rnns = nn.ModuleList()
+            self.lrnn_layer_norms = nn.ModuleList()
+            self.lrnn_window_size = lrnn_window_size
 
         self.self_atts = nn.ModuleList()
         self.self_att_layer_norms = nn.ModuleList()
@@ -39,19 +40,21 @@ class MedPoseDecoder(nn.Module):
             R-Transformer slightly by using a ConvLSTM instead of a 
             LSTM as the LocalRNN module
             '''
-            local_rnn = MedPoseConvLSTM(
-                    num_layers=num_lrnn_layers, 
-                    input_size=(num_keypoints * 2),
-                    model_size=model_dim,
-                    hidden_size=lrnn_hidden_dim,
-                    batch_first=True,
-                    conv2d_req=False,
-                    conv1d_req=True,
-                    decoder_first=(dec_layer == 0))
-            self.local_rnns.append(local_rnn)
+            if use_lrnn:
+                local_rnn = MedPoseConvLSTM(
+                        num_layers=num_lrnn_layers, 
+                        input_size=num_keypoints,
+                        model_size=model_dim,
+                        hidden_size=lrnn_hidden_dim,
+                        batch_first=True,
+                        lrnn_batch_norm=lrnn_batch_norm,
+                        conv2d_req=(dec_layer == 0),
+                        conv1d_req=(dec_layer != 0),
+                        decoder_first=(dec_layer == 0))
+                self.local_rnns.append(local_rnn)
 
-            lrnn_layer_norm = nn.LayerNorm(lrnn_hidden_dim, eps=1e-05, elementwise_affine=True)
-            self.lrnn_layer_norms.append(lrnn_layer_norm)
+                lrnn_layer_norm = nn.LayerNorm(lrnn_hidden_dim, eps=1e-05, elementwise_affine=True)
+                self.lrnn_layer_norms.append(lrnn_layer_norm)
             '''
             Attention mechanism (self-attention) on outputs of
             LocalRNN to find local structures to attend to from
@@ -96,26 +99,6 @@ class MedPoseDecoder(nn.Module):
 
             ff_layer_norm = nn.LayerNorm(model_dim, eps=1e-05, elementwise_affine=True)
             self.ff_layer_norms.append(ff_layer_norm)
-        '''
-        fully connected networks for classification (pose detectable
-        or not) and regression (regressing from final decoder output
-        to joint coordinates per region)
-        '''
-        self.pose_cl = nn.Sequential(
-                    nn.Linear(model_dim, 64),
-                    nn.ReLU(),
-                    nn.Dropout(0.1),
-                    nn.Linear(64, 32),
-                    nn.ReLU(),
-                    nn.Dropout(0.1),
-                    nn.Linear(32, 2)
-                )
-        self.pose_regress = nn.Sequential(
-                    nn.Linear(model_dim, 64),
-                    nn.ReLU(),
-                    nn.Dropout(0.1),
-                    nn.Linear(64, num_keypoints * 2)
-                )
 
     def forward(self, enc_out, poses=None, initial_frame=True):
         '''
@@ -153,7 +136,7 @@ class MedPoseDecoder(nn.Module):
                 curr_dec_hist = self.dec_history[enc_out.get_device() - 1]
                 if dec_layer == 0:
                     poses = poses[:, -self.lrnn_window_size:]
-                    poses = poses.permute(0, 1, 3, 2)
+                    #poses = poses.permute(0, 1, 3, 2)
                     (context, _), residual_connection = self.local_rnns[dec_layer](poses)
                     #(context, _), residual_connection = data_parallel(self.local_rnns[dec_layer], poses, self.gpus, self.device)
                 else:
@@ -248,13 +231,4 @@ class MedPoseDecoder(nn.Module):
                 #curr_dec_hist.append_history(dec_layer + 1, dec_out.to(curr_dec_hist.get_history_device(dec_layer + 1)))
                 curr_dec_hist.append_history(dec_layer + 1, dec_out)
             
-        '''
-        pass output of last decoder layer to fully connected network for
-        pose estimation
-        '''
-        curr_poses_classes = self.pose_cl(dec_out)
-        #curr_poses_classes = data_parallel(self.pose_cl, dec_out, self.gpus, self.device)
-        curr_poses = self.pose_regress(dec_out)
-        #curr_poses = data_parallel(self.pose_regress, dec_out, self.gpus, self.device)
-
-        return curr_poses, curr_poses_classes
+        return dec_out

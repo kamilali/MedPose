@@ -4,7 +4,7 @@ import sys
 import os
 import json
 import glob
-from convert import convert_videos
+from maskrcnn_benchmark.data.datasets.evaluation.poseval.py.convert import convert_videos
 
 MIN_SCORE = -9999
 MAX_TRACK_ID = 10000
@@ -396,7 +396,7 @@ def load_data_dir(argv):
     gtBasename = os.path.basename(filenames[i])
     predFilename = pred_dir + gtBasename
     if (not os.path.exists(predFilename)):
-        print(filenames[i], "skipped")
+        print(predFilename, "does not exist...", filenames[i], "skipped")
         continue
         #raise IOError('Prediction file ' + predFilename + ' does not exist')
     else:

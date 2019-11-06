@@ -25,21 +25,23 @@ MODEL:
     POOLER_SCALES: (0.25, 0.125, 0.0625, 0.03125)
     FEATURE_EXTRACTOR: "KeypointRCNNFeatureExtractor"
     PREDICTOR: "KeypointRCNNPredictor"
-    POOLER_RESOLUTION: 14
+    POOLER_RESOLUTION: 6
     POOLER_SAMPLING_RATIO: 2
-    RESOLUTION: 56
+    RESOLUTION: 24
     SHARE_BOX_FEATURE_EXTRACTOR: False
   MEDPOSE:
     FEATURE_ENLARGER: "KeypointRCNNFeatureEnlarger"
     HEATMAP_UPSCALE: 2
-    STACK_LAYERS: 4
+    STACK_LAYERS: 2
     WINDOW_SIZE: 3
     ROI_MAP_DIM: 6
     MODEL_DIM: 612
     NUM_KEYPOINTS: 17
   KEYPOINT_ON: True
-  MEDPOSE_ON: False # using our architecture head (baseline or otherwise) instead of maskrcnn-benchmark
-  MEDPOSE_ABLATION: False # setting this to True uses baseline model
+  MEDPOSE_ON: True
+  MEDPOSE_ABLATION: False
+  MEDPOSE_DECODER: True
+  MEDPOSE_SYNC_BATCHNORM: False
 DATASETS:
   TRAIN: ("posetrack_train",) # TRAIN: ("keypoints_coco_2014_train", "keypoints_coco_2014_valminusminival",) #TRAIN: ("keypoints_coco_2017_train", "keypoints_coco_2017_val",)
   TEST: ("posetrack_val",) # for some reason posetrack_test is not working will debug later
@@ -56,6 +58,6 @@ SOLVER:
   STEPS: (120000, 160000)
   MAX_ITER: 180000
   CHECKPOINT_PERIOD: 500
-OUTPUT_DIR: "/scratch/users/kamilali/medpose-model-data/models_kprcnn_baseline_res101_w_posetrack_only"
+OUTPUT_DIR: "/scratch/users/kamilali/medpose-model-data/models_medpose_full_res101_w_posetrack_only"
 NUM_GPUS: 2
 POSETRACK_EVAL: True

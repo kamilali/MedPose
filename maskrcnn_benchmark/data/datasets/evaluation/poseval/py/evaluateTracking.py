@@ -3,9 +3,9 @@ import json
 import os
 import sys
 
-import eval_helpers
-from eval_helpers import Joint
-import motmetrics as mm
+import maskrcnn_benchmark.data.datasets.evaluation.poseval.py.eval_helpers
+from maskrcnn_benchmark.data.datasets.evaluation.poseval.py.eval_helpers import Joint
+#import maskrcnn_benchmark.data.datasets.evaluation.poseval.pymotmetrics.motmetrics as mm
 
 
 def computeMetrics(gtFramesAll, motAll, outputDir, bSaveAll, bSaveSeq):

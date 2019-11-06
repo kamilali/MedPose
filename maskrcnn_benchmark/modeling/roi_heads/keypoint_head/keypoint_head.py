@@ -25,24 +25,42 @@ class ROIKeypointHead(torch.nn.Module):
         self.cfg = cfg.clone()
         self.feature_extractor = make_roi_keypoint_feature_extractor(cfg, in_channels)
         if cfg.MODEL.MEDPOSE_ON:
-            # used to enlarge feature map feature size
-            self.feature_map_enlarger = make_roi_keypoint_feature_enlarger(cfg, in_channels)
-            # to build residual connection for heatmap production
-            self.conv_fcn1 = layers.Conv2d(cfg.MODEL.MEDPOSE.MODEL_DIM, cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, 1, stride=1, padding=0)
-            nn.init.kaiming_normal_(self.conv_fcn1.weight, mode="fan_out", nonlinearity="relu")
-            nn.init.constant_(self.conv_fcn1.bias, 0)
-            # encoder architecture
-            encoder_history = [MedPoseHistory() for i in range(cfg.NUM_GPUS)]
-            self.encoder = MedPoseEncoder(
-                num_enc_layers=cfg.MODEL.MEDPOSE.STACK_LAYERS,
-                enc_history=encoder_history,
-                model_dim=cfg.MODEL.MEDPOSE.MODEL_DIM,
-                lrnn_hidden_dim=cfg.MODEL.MEDPOSE.MODEL_DIM,
-                lrnn_window_size=cfg.MODEL.MEDPOSE.WINDOW_SIZE,
-                roi_map_dim=cfg.MODEL.MEDPOSE.ROI_MAP_DIM,
-                gpus=range(cfg.NUM_GPUS),
-                lrnn_batch_norm=False)
-            self.lrnn_window_size = cfg.MODEL.MEDPOSE.WINDOW_SIZE
+            if not cfg.MODEL.MEDPOSE_ABLATION:
+                per_gpu_batch_size = float(cfg.SOLVER.IMS_PER_BATCH) / float(cfg.NUM_GPUS)
+                # used to enlarge feature map feature size
+                self.feature_map_enlarger = make_roi_keypoint_feature_enlarger(cfg, in_channels)
+                # to build residual connection for heatmap production
+                self.conv_fcn1 = layers.Conv2d(cfg.MODEL.MEDPOSE.MODEL_DIM, cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, 1, stride=1, padding=0)
+                nn.init.kaiming_normal_(self.conv_fcn1.weight, mode="fan_out", nonlinearity="relu")
+                nn.init.constant_(self.conv_fcn1.bias, 0)
+                # encoder architecture
+                encoder_history = [MedPoseHistory() for i in range(cfg.NUM_GPUS)]
+                self.encoder = MedPoseEncoder(
+                    num_enc_layers=cfg.MODEL.MEDPOSE.STACK_LAYERS,
+                    enc_history=encoder_history,
+                    model_dim=cfg.MODEL.MEDPOSE.MODEL_DIM,
+                    lrnn_hidden_dim=cfg.MODEL.MEDPOSE.MODEL_DIM,
+                    lrnn_window_size=cfg.MODEL.MEDPOSE.WINDOW_SIZE,
+                    roi_map_dim=cfg.MODEL.MEDPOSE.ROI_MAP_DIM,
+                    gpus=range(cfg.NUM_GPUS),
+                    lrnn_batch_norm=cfg.MODEL.MEDPOSE_SYNC_BATCHNORM,
+                    use_lrnn=cfg.MODEL.MEDPOSE_ENCODER_LRCM)
+                self.lrnn_window_size = cfg.MODEL.MEDPOSE.WINDOW_SIZE
+                if cfg.MODEL.MEDPOSE_DECODER:
+                    decoder_history = [MedPoseHistory() for i in range(cfg.NUM_GPUS)]
+                    self.decoder = MedPoseDecoder(
+                        num_dec_layers=cfg.MODEL.MEDPOSE.STACK_LAYERS,
+                        dec_history=decoder_history,
+                        model_dim=cfg.MODEL.MEDPOSE.MODEL_DIM,
+                        lrnn_hidden_dim=cfg.MODEL.MEDPOSE.MODEL_DIM,
+                        lrnn_window_size=cfg.MODEL.MEDPOSE.WINDOW_SIZE,
+                        roi_map_dim=cfg.MODEL.MEDPOSE.ROI_MAP_DIM,
+                        gpus=range(cfg.NUM_GPUS),
+                        lrnn_batch_norm=cfg.MODEL.MEDPOSE_SYNC_BATCHNORM,
+                        use_lrnn=cfg.MODEL.MEDPOSE.MEDPOSE_DECODER_LRCM)
+            else:
+                # to build residual connection for heatmap production (this is only thing necessary -> no medpose)
+                self.conv_fcn1 = layers.Conv2d(cfg.MODEL.MEDPOSE.MODEL_DIM, cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, 1, stride=1, padding=0)
             # heatmap builder (can replace with just the interpolation)
             self.heatmap_builder = make_roi_keypoint_predictor(
                 cfg, cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, cfg.MODEL.MEDPOSE.HEATMAP_UPSCALE)
@@ -113,6 +131,8 @@ class ROIKeypointHead(torch.nn.Module):
                 proposals = self.loss_evaluator.subsample(proposals, targets)
         if self.cfg.MODEL.MEDPOSE_ON:
             preds = []
+            if self.cfg.MODEL.MEDPOSE_DECODER:
+                metadata = []
             loss_proposals = proposals
             if self.cfg.MODEL.MEDPOSE_ABLATION:
                 # not using encoder output, simply passing the residual connection through the heatmap builder
@@ -151,12 +171,27 @@ class ROIKeypointHead(torch.nn.Module):
                     vid_feat_seq = vid_feat_seq[-self.cfg.MODEL.MEDPOSE.WINDOW_SIZE:]
                     feature_map = torch.stack(vid_feat_seq, dim=1)
                     # get output of encoder (heatmap producing features)
-                    enc_out = self.encoder(feature_map, region_features, (curr_frame_idx == 0), True)
-                    enc_out = self._reconstruct_outputs(enc_out, restore_dict)
-                    enc_out = enc_out.view(enc_out.shape[0], self.cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM)
-                    # (viewing into heatmap doesn't take into account spatial information --> still have to test this theory with ablation) 
-                    kp_logits = self.heatmap_builder(enc_out + residual_connection)
-                    preds.append(kp_logits)
+                    enc_out = self.encoder(feature_map, region_features, (curr_frame_idx == 0))
+
+                    if self.cfg.MODEL.MEDPOSE_DECODER:
+                        if len(preds) == 0:
+                            dec_out = self.decoder(enc_out, None, (curr_frame_idx == 0))
+                        else:
+                            poses_in = preds[-self.cfg.MODEL.MEDPOSE.WINDOW_SIZE:]
+                            md = metadata[-self.cfg.MODEL.MEDPOSE.WINDOW_SIZE:]
+                            poses_in = [self._reformat_region_feats(p_in, margs, vid_shape)[0] for p_in, margs in zip(poses_in, md)]
+                            dec_out = self.decoder(enc_out, torch.stack(poses_in, dim=1), (curr_frame_idx == 0))
+                        dec_out = self._reconstruct_outputs(dec_out, restore_dict)
+                        dec_out = dec_out.view(dec_out.shape[0], self.cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM)
+                        kp_logits = self.heatmap_builder(dec_out + residual_connection)
+                        preds.append(kp_logits)
+                        metadata.append(rois)
+                    else:
+                        enc_out = self._reconstruct_outputs(enc_out, restore_dict)
+                        enc_out = enc_out.view(enc_out.shape[0], self.cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM, self.cfg.MODEL.MEDPOSE.ROI_MAP_DIM)
+                        # (viewing into heatmap doesn't take into account spatial information --> still have to test this theory with ablation) 
+                        kp_logits = self.heatmap_builder(enc_out + residual_connection)
+                        preds.append(kp_logits)
                     ## no ConvTranspose2d...just the interpolation
                     # kp_logits = layers.interpolate(
                     #     enc_out, scale_factor=self.up_scale, mode="bilinear", align_corners=False

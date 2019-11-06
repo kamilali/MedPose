@@ -54,6 +54,8 @@ def train(cfg, local_rank, distributed):
     model, optimizer = amp.initialize(model, optimizer, opt_level=amp_opt_level)
 
     if distributed:
+        if cfg.MODEL.MEDPOSE_SYNC_BATCHNORM:
+            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[local_rank], output_device=local_rank,
             # this should be removed if we update BatchNorm stats
@@ -91,6 +93,7 @@ def train(cfg, local_rank, distributed):
         device,
         checkpoint_period,
         arguments,
+        output_dir
     )
 
     return model

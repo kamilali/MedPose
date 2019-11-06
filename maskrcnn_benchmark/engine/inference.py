@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 from maskrcnn_benchmark.config import cfg
 from maskrcnn_benchmark.data.datasets.evaluation import evaluate
+from maskrcnn_benchmark.data.datasets.evaluation.poseval.py import evaluate_simple
 from maskrcnn_benchmark.config.paths_catalog import DatasetCatalog
 from ..utils.comm import is_main_process, get_world_size
 from ..utils.comm import all_gather
@@ -17,6 +18,9 @@ from .bbox_aug import im_detect_bbox_aug
 from maskrcnn_benchmark.structures.boxlist_ops import boxlist_iou
 from maskrcnn_benchmark.structures.bounding_box import BoxList
 
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
 import copy
 import shutil
 import json
@@ -25,6 +29,8 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+MAX_TRACK_IDS = 999
+FIRT_TRACK_ID = 0
 
 def compute_on_dataset(model, data_loader, device, timer=None):
     model.eval()
@@ -173,7 +179,34 @@ def inference(
             #print(annotation_mappings.keys())
             # preprocess images using video info
             vid_info = dataset.get_img_info(vid_id)
-            for im_id, im_prediction in zip(original_id, prediction):
+
+            # tracking
+            next_track_id = FIRT_TRACK_ID
+            video_tracks = []
+            for frame_id, (im_id, im_prediction) in enumerate(zip(original_id, prediction)):
+                frame_tracks = []
+                curr_boxes = im_prediction.bbox.numpy()
+                curr_poses = im_prediction.get_field('keypoints').keypoints.numpy()
+                if frame_id == 0:
+                    matches = -np.ones((curr_boxes.shape[0],))
+                else:
+                    prev_boxes = prediction[frame_id - 1].bbox.numpy()
+                    prev_poses = prediction[frame_id - 1].get_field('keypoints').keypoints.numpy()
+                    matches = _compute_matches(prediction[frame_id - 1], im_prediction, prev_boxes, curr_boxes, prev_poses, curr_poses)
+                prev_tracks = video_tracks[frame_id - 1] if frame_id > 0 else None
+                for m in matches:
+                    # didnt match to any
+                    if m == -1:
+                        frame_tracks.append(next_track_id)
+                        next_track_id += 1
+                        if next_track_id > MAX_TRACK_IDS:
+                            print("exceeded max track ids")
+                            next_track_id %= MAX_TRACK_IDS
+                    else:
+                        frame_tracks.append(prev_tracks[m])
+                video_tracks.append(frame_tracks)
+
+            for im_id, im_prediction, frame_tracks in zip(original_id, prediction, video_tracks):
                 # ensure that image ids are unique
                 #assert im_id not in predictions_dict, "videos have images with overlapping ids"
                 vid_width = vid_info['width']
@@ -185,54 +218,39 @@ def inference(
                 #print(im_id, im_prediction.fields(), "image prediction fields")
                 boxes = im_prediction.bbox.tolist()
                 keypoints = im_prediction.get_field('keypoints')
-                keypoint_scores = keypoints.get_field('logits')
-                keypoints = keypoints.resize((vid_width, vid_height))
-                #print(keypoints.keypoints.tolist())
-                scores = im_prediction.get_field('scores').tolist()
-                labels = im_prediction.get_field('labels').tolist()
+                if keypoints.keypoints.shape[0] != 0:
+                    keypoint_scores = keypoints.get_field('logits').view(keypoints.keypoints.shape[0], -1)
+                    keypoints = keypoints.resize((vid_width, vid_height))
+                    keypoints = keypoints.keypoints.view(keypoints.keypoints.shape[0], -1)
+                    #print(keypoints.keypoints.tolist())
+                    scores = im_prediction.get_field('scores').tolist()
+                    labels = im_prediction.get_field('labels').tolist()
 
-                # match per region and create annotation
-                #print(len(keypoints.keypoints))
-                ann_key = str(im_id)
-                # check if annotation exists for current image
-                if ann_key in annotation_mappings:
-                    a_idxs = annotation_mappings[ann_key]
-                    track_id = 0
-                    for a_idx in a_idxs:
-                        gt_ann = annotation_json[a_idx]
-                        # print(gt_ann.keys(), "ground truth annotation keys")
-                        gt_box = BoxList([gt_ann['bbox']], (vid_width, vid_height), mode='xywh')
-                        box_ious = boxlist_iou(im_prediction, gt_box)
-                        # ensure that a corresponding box exists
-                        if box_ious.shape[0] != 0:
-                            match_idx = box_ious.max(0)[1].item()
-                            #print(gt_ann['bbox'], "ground truth box")
-                            #print(boxes[match_idx], "predicted box")
-                            pred_ann = {}
-                            pred_ann['bbox'] = boxes[match_idx]
-                            pred_ann['keypoints'] = keypoints.keypoints[match_idx].numpy().flatten().tolist()
-                            #pred_ann['id'] = gt_ann['id']
-                            #print(gt_ann['id'], "annotation id")
-                            #print(im_id, "image id")
-                            # currently only estimation not tracking
-                            pred_ann['track_id'] = track_id
-                            track_id = track_id + 1
-                            #pred_ann['track_id'] = gt_ann['track_id']
-                            pred_ann['image_id'] = im_id
-                            #pred_ann['bbox_head'] = gt_ann['bbox_head']
-                            #pred_ann['category_id'] = gt_ann['category_id']
-                            #pred_ann['scores'] = [scores[match_idx]]
-                            pred_ann['scores'] = keypoint_scores[match_idx].numpy().flatten().tolist()
-                            # print(pred_ann.keys(), "predicted annotation keys")
-                            #print(a_idx)
-                            #predicted_json["annotations"].append(pred_ann)
-                            predicted_json["annotations"][a_idx] = pred_ann
-                            #print(gt_ann['scores'], gt_ann['category_id'], gt_ann['id'], gt_ann['image_id'], gt_ann['track_id'], gt_ann['bbox_head'])
-                            #pred_ann['scores']
-                            #print(len(gt_ann['keypoints']), "ground truth keypoints")
-                            #print(len(pred_ann['keypoints']), "predicted keypoints")
+                    # match per region and create annotation
+                    #print(len(keypoints.keypoints))
+                    ann_key = str(im_id)
+                    # check if annotation exists for current image
+                    if ann_key in annotation_mappings:
+                        a_idxs = annotation_mappings[ann_key]
+                        for a_idx in a_idxs:
+                            gt_ann = annotation_json[a_idx]
+                            # print(gt_ann.keys(), "ground truth annotation keys")
+                            gt_box = BoxList([gt_ann['bbox']], (vid_width, vid_height), mode='xywh')
+                            box_ious = boxlist_iou(im_prediction, gt_box)
+                            # ensure that a corresponding box exists
+                            if box_ious.shape[0] != 0:
+                                match_idx = box_ious.max(0)[1].item()
+                                pred_ann = {}
+                                pred_ann['bbox'] = boxes[match_idx]
+                                pred_ann['keypoints'] = keypoints[match_idx].tolist()
+                                pred_ann['track_id'] = frame_tracks[match_idx]
+                                pred_ann['image_id'] = im_id
+                                pred_ann['scores'] = keypoint_scores[match_idx].tolist()
+                                predicted_json["annotations"][a_idx] = pred_ann
+                    else:
+                        print("annotation does not exist for current image... no predictions")
                 else:
-                    print("annotation does not exist for current image... no predictions")
+                    print("no predictions for: ", im_id)
             # write out prediction file for current video 
             output_file = os.path.join(output_folder, dataset.id_to_annotation_file_map[vid_id])
             print("Saving current video predictions to", output_file)
@@ -240,6 +258,9 @@ def inference(
                 json.dump(predicted_json, f)
 
         # pose track evaluation handled seperately
+        annotation_dir = os.path.join(annotation_dir, '')
+        output_folder = os.path.join(output_folder, '')
+        evaluate_simple.evaluate(annotation_dir, output_folder, True, False, False)
         return
 
     if output_folder:
@@ -257,6 +278,63 @@ def inference(
                     predictions=predictions,
                     output_folder=output_folder,
                     **extra_args)
+
+def _compute_pairwise_iou(a, b):
+    """
+    a, b (np.ndarray) of shape Nx4T and Mx4T.
+    The output is NxM, for each combination of boxes.
+    """
+    ious = boxlist_iou(a, b)
+    return ious
+
+def _compute_distance_matrix(
+    prev_json_data, prev_boxes, prev_poses,
+    cur_json_data, cur_boxes, cur_poses,
+    cost_types, cost_weights
+):
+    assert(len(cost_weights) == len(cost_types))
+    all_Cs = []
+    for cost_type, cost_weight in zip(cost_types, cost_weights):
+        if cost_weight == 0:
+            continue
+        if cost_type == 'bbox-overlap':
+            all_Cs.append((1 - _compute_pairwise_iou(prev_json_data, cur_json_data)))
+        else:
+            raise NotImplementedError('Unknown cost type {}'.format(cost_type))
+        all_Cs[-1] *= cost_weight
+    return np.sum(np.stack(all_Cs, axis=0), axis=0)
+
+def _compute_matches(prev_frame_data, cur_frame_data, prev_boxes, cur_boxes,
+                     prev_poses, cur_poses, cost_types=('bbox-overlap',), cost_weights=(1.0,), bipart_match_algo="hungarian"):
+    """
+    C (cost matrix): num_prev_boxes x num_current_boxes
+    Optionally input the cost matrix, in which case you can input dummy values
+    for the boxes and poses
+    Returns:
+        matches: A 1D np.ndarray with as many elements as boxes in current
+        frame (cur_boxes). For each, there is an integer to index the previous
+        frame box that it matches to, or -1 if it doesnot match to any previous
+        box.
+    """
+    # matches structure keeps track of which of the current boxes matches to
+    # which box in the previous frame. If any idx remains -1, it will be set
+    # as a new track.
+    nboxes = cur_boxes.shape[0]
+    matches = -np.ones((nboxes,), dtype=np.int32)
+    C = _compute_distance_matrix(
+        prev_frame_data, prev_boxes, prev_poses,
+        cur_frame_data, cur_boxes, cur_poses,
+        cost_types=cost_types,
+        cost_weights=cost_weights)
+    if bipart_match_algo == 'hungarian':
+        prev_inds, next_inds = linear_sum_assignment(C)
+    else:
+        raise NotImplementedError('Unknown matching algo: {}'.format(
+            bipart_match_algo))
+    assert(len(prev_inds) == len(next_inds))
+    for i in range(len(prev_inds)):
+        matches[next_inds[i]] = prev_inds[i]
+    return matches
 
 def visualize(image, boxes=None, keypoints=None):
     fig, ax = plt.subplots(1)

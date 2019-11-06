@@ -3,7 +3,7 @@ import json
 import os
 import sys
 
-import eval_helpers
+import maskrcnn_benchmark.data.datasets.evaluation.poseval.py.eval_helpers
 
 def computeDist(gtFrames,prFrames):
     assert(len(gtFrames) == len(prFrames))

@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
+import torch.distributed as dist
 from math import sqrt
 
 class MedPoseAttention(nn.Module):
@@ -72,101 +73,106 @@ class MedPoseConvLSTM(nn.Module):
             passed into an LSTM to capture dependencies over frame
             sequences
             '''
-            if lrnn_batch_norm:
-                self.conv2d = nn.Sequential(
-                            nn.Conv2d(input_size, input_size // 2, kernel_size=3, padding=1, stride=2),
-                            nn.BatchNorm2d(input_size // 2),
-                            nn.ReLU(),
-                            nn.MaxPool2d(kernel_size=2),
-                            nn.Conv2d(input_size // 2, input_size // 4, kernel_size=3, padding=1, stride=2),
-                            nn.BatchNorm2d(input_size // 4),
-                            nn.ReLU(),
-                            nn.MaxPool2d(kernel_size=2),
-                            nn.Conv2d(input_size // 4, input_size // 2, kernel_size=3, padding=1, stride=2),
-                            nn.BatchNorm2d(input_size // 2),
-                            nn.ReLU(),
-                            nn.MaxPool2d(kernel_size=2),
-                            nn.Conv2d(input_size // 2, input_size // 2, kernel_size=3, padding=1, stride=2),
-                            nn.BatchNorm2d(input_size // 2),
-                            nn.ReLU(),
-                            nn.Conv2d(input_size // 2, input_size, kernel_size=3, padding=1, stride=2),
-                            nn.BatchNorm2d(input_size),
-                            nn.ReLU()
-                        )
-            else:
-                self.conv2d = nn.Sequential(
-                            nn.Conv2d(input_size, input_size // 2, kernel_size=3, padding=1, stride=2),
-                            nn.ReLU(),
-                            nn.MaxPool2d(kernel_size=2),
-                            nn.Conv2d(input_size // 2, input_size // 4, kernel_size=3, padding=1, stride=2),
-                            nn.ReLU(),
-                            nn.MaxPool2d(kernel_size=2),
-                            nn.Conv2d(input_size // 4, input_size // 2, kernel_size=3, padding=1, stride=2),
-                            nn.ReLU(),
-                            nn.MaxPool2d(kernel_size=2),
-                            nn.Conv2d(input_size // 2, input_size // 2, kernel_size=3, padding=1, stride=2),
-                            nn.ReLU(),
-                            nn.Conv2d(input_size // 2, input_size, kernel_size=3, padding=1, stride=2),
-                            nn.ReLU()
-                        )
-
-        if conv1d_req:
-            '''
-            in processing outputs of encoder layers instead of feature
-            map inputs, 2d convolutions are substituted with 1d convolutions
-            '''
             if decoder_first:
                 if lrnn_batch_norm:
-                    self.conv1d = nn.Sequential(
-                                nn.Conv1d(input_size, input_size // 2, kernel_size=5, padding=1, stride=2),
-                                nn.BatchNorm1d(input_size // 2),
-                                nn.ReLU(),
-                                nn.MaxPool1d(kernel_size=2),
-                                nn.Conv1d(input_size // 2, input_size // 4, kernel_size=5, padding=1, stride=1),
-                                nn.BatchNorm1d(input_size // 4),
-                                nn.ReLU(),
-                                nn.MaxPool1d(kernel_size=2),
-                                nn.Conv1d(input_size // 4, input_size // 4, kernel_size=5, padding=0, stride=1),
-                                nn.BatchNorm1d(input_size // 4),
-                                nn.ReLU()
-                            )
+                    self.conv2d = nn.Sequential(
+                        nn.Conv2d(input_size, 32, kernel_size=3, padding=1, stride=2),
+                        SyncBatchNorm(32),
+                        nn.ReLU(),
+                        nn.MaxPool2d(kernel_size=2),
+                        nn.Conv2d(32, 68, kernel_size=3, padding=1, stride=2),
+                        SyncBatchNorm(68),
+                        nn.ReLU(),
+                        #nn.MaxPool2d(kernel_size=2),
+                        #nn.Conv2d(input_size * 4, input_size * 2, kernel_size=3, padding=1, stride=2),
+                        #nn.BatchNorm2d(input_size * 2),
+                        #nn.ReLU(),
+                        #nn.MaxPool2d(kernel_size=2),
+                        #nn.Conv2d(input_size * 2, input_size * 2, kernel_size=3, padding=1, stride=2),
+                        #nn.BatchNorm2d(input_size * 2),
+                        #nn.ReLU(),
+                        #nn.Conv2d(input_size * 2, input_size, kernel_size=3, padding=1, stride=2),
+                        #nn.BatchNorm2d(input_size),
+                        #nn.ReLU()
+                    )
                 else:
-                    self.conv1d = nn.Sequential(
-                                nn.Conv1d(input_size, input_size // 2, kernel_size=5, padding=1, stride=2),
-                                nn.ReLU(),
-                                nn.MaxPool1d(kernel_size=2),
-                                nn.Conv1d(input_size // 2, input_size // 4, kernel_size=5, padding=1, stride=1),
-                                nn.ReLU(),
-                                nn.MaxPool1d(kernel_size=2),
-                                nn.Conv1d(input_size // 4, input_size // 4, kernel_size=5, padding=0, stride=1),
-                                nn.ReLU()
-                            )
+                    self.conv2d = nn.Sequential(
+                        nn.Conv2d(input_size, 32, kernel_size=3, padding=1, stride=2),
+                        nn.ReLU(),
+                        nn.MaxPool2d(kernel_size=2),
+                        nn.Conv2d(32, 68, kernel_size=3, padding=1, stride=2),
+                        nn.ReLU()
+                    )
             else:
                 if lrnn_batch_norm:
-                    self.conv1d = nn.Sequential(
-                                nn.Conv1d(model_size, model_size // 2, kernel_size=5, padding=1, stride=2),
-                                nn.BatchNorm1d(model_size // 2),
+                    self.conv2d = nn.Sequential(
+                                nn.Conv2d(input_size, input_size // 2, kernel_size=3, padding=1, stride=2),
+                                nn.SyncBatchNorm(input_size // 2),
                                 nn.ReLU(),
-                                nn.MaxPool1d(kernel_size=2),
-                                nn.Conv1d(model_size // 2, model_size // 4, kernel_size=5, padding=1, stride=2),
-                                nn.BatchNorm1d(model_size // 4),
+                                nn.MaxPool2d(kernel_size=2),
+                                nn.Conv2d(input_size // 2, input_size // 4, kernel_size=3, padding=1, stride=2),
+                                nn.SyncBatchNorm(input_size // 4),
                                 nn.ReLU(),
-                                nn.MaxPool1d(kernel_size=2),
-                                nn.Conv1d(model_size // 4, model_size // 8, kernel_size=5, padding=1, stride=2),
-                                nn.BatchNorm1d(model_size // 8),
+                                nn.MaxPool2d(kernel_size=2),
+                                nn.Conv2d(input_size // 4, input_size // 2, kernel_size=3, padding=1, stride=2),
+                                nn.SyncBatchNorm(input_size // 2),
+                                nn.ReLU(),
+                                nn.MaxPool2d(kernel_size=2),
+                                nn.Conv2d(input_size // 2, input_size // 2, kernel_size=3, padding=1, stride=2),
+                                nn.SyncBatchNorm(input_size // 2),
+                                nn.ReLU(),
+                                nn.Conv2d(input_size // 2, input_size, kernel_size=3, padding=1, stride=2),
+                                nn.SyncBatchNorm(input_size),
                                 nn.ReLU()
                             )
                 else:
-                    self.conv1d = nn.Sequential(
-                                nn.Conv1d(model_size, model_size // 2, kernel_size=5, padding=1, stride=2),
+                    self.conv2d = nn.Sequential(
+                                nn.Conv2d(input_size, input_size // 2, kernel_size=3, padding=1, stride=2),
                                 nn.ReLU(),
-                                nn.MaxPool1d(kernel_size=2),
-                                nn.Conv1d(model_size // 2, model_size // 4, kernel_size=5, padding=1, stride=2),
+                                nn.MaxPool2d(kernel_size=2),
+                                nn.Conv2d(input_size // 2, input_size // 4, kernel_size=3, padding=1, stride=2),
                                 nn.ReLU(),
-                                nn.MaxPool1d(kernel_size=2),
-                                nn.Conv1d(model_size // 4, model_size // 8, kernel_size=5, padding=1, stride=2),
+                                nn.MaxPool2d(kernel_size=2),
+                                nn.Conv2d(input_size // 4, input_size // 2, kernel_size=3, padding=1, stride=2),
+                                nn.ReLU(),
+                                nn.MaxPool2d(kernel_size=2),
+                                nn.Conv2d(input_size // 2, input_size // 2, kernel_size=3, padding=1, stride=2),
+                                nn.ReLU(),
+                                nn.Conv2d(input_size // 2, input_size, kernel_size=3, padding=1, stride=2),
                                 nn.ReLU()
                             )
+
+        #if conv1d_req:
+        #    '''
+        #    in processing outputs of encoder layers instead of feature
+        #    map inputs, 2d convolutions are substituted with 1d convolutions
+        #    '''
+            #pass
+            # if lrnn_batch_norm:
+            #     self.conv1d = nn.Sequential(
+            #                 nn.Conv1d(model_size, model_size // 2, kernel_size=5, padding=1, stride=2),
+            #                 nn.BatchNorm1d(model_size // 2),
+            #                 nn.ReLU(),
+            #                 nn.MaxPool1d(kernel_size=2),
+            #                 nn.Conv1d(model_size // 2, model_size // 4, kernel_size=5, padding=1, stride=2),
+            #                 nn.BatchNorm1d(model_size // 4),
+            #                 nn.ReLU(),
+            #                 nn.MaxPool1d(kernel_size=2),
+            #                 nn.Conv1d(model_size // 4, model_size // 8, kernel_size=5, padding=1, stride=2),
+            #                 nn.BatchNorm1d(model_size // 8),
+            #                 nn.ReLU()
+            #             )
+            # else:
+            #     self.conv1d = nn.Sequential(
+            #                 nn.Conv1d(model_size, model_size // 2, kernel_size=5, padding=1, stride=2),
+            #                 nn.ReLU(),
+            #                 nn.MaxPool1d(kernel_size=2),
+            #                 nn.Conv1d(model_size // 2, model_size // 4, kernel_size=5, padding=1, stride=2),
+            #                 nn.ReLU(),
+            #                 nn.MaxPool1d(kernel_size=2),
+            #                 nn.Conv1d(model_size // 4, model_size // 8, kernel_size=5, padding=1, stride=2),
+            #                 nn.ReLU()
+            #             )
         self.conv2d_req = conv2d_req
         self.conv1d_req = conv1d_req
         '''
@@ -198,19 +204,31 @@ class MedPoseConvLSTM(nn.Module):
         through lstm to capture dependencies
         '''
         if self.conv2d_req:
-            batch_size, num_frames, c, h, w = x.shape
-            c_in = x.view(batch_size * num_frames, c, h, w)
+            if len(x.shape) == 6:
+                batch_size, num_frames, num_regions, num_keypoints, h, w = x.shape
+                c_in = x.view(-1, num_keypoints, h, w)
+            else:
+                batch_size, num_frames, c, h, w = x.shape
+                c_in = x.view(batch_size * num_frames, c, h, w)
             c_out = self.conv2d(c_in)
-            r_in = c_out.view(batch_size, num_frames, -1)
+            if len(x.shape) == 6:
+                c_out = c_out.view(batch_size, num_frames, num_regions, -1)
+                r_in = c_out.view(batch_size, num_frames * num_regions, -1)
+            else:
+                r_in = c_out.view(batch_size, num_frames, -1)
             # ensure the input is of correct feature dim size
             if r_in.shape[2] > self.model_dim:
                 r_in = F.max_pool1d(r_in, kernel_size=2)
         elif self.conv1d_req:
-            batch_size, num_frames, c, l = x.shape
-            c_in = x.view(batch_size * num_frames, c, l)
+            x = x.permute(0, 1, 3, 2).contiguous()
+            batch_size, num_frames, l, c = x.shape
+            r_in = x.view(batch_size, num_frames * l, c)
             #c_in = c_in.cuda(next(self.conv1d.parameters()).get_device())
-            c_out = self.conv1d(c_in)
-            r_in = c_out.view(batch_size, num_frames, -1)
+            #print(c_in.shape, "conv1d in")
+            #c_out = self.conv1d(c_in)
+            #print(c_out.shape, "conv1d out")
+            #r_in = c_out.view(batch_size, num_frames, -1)
+            #print(r_in.shape, "conv1d")
         else:
             r_in = x
         self.lstm.flatten_parameters()
@@ -227,6 +245,68 @@ class MedPoseLayerNorm(nn.Module):
         mean = x.mean(-1, keepdim=True)
         std = x.std(-1, keepdim=True)
         return self.gamma * (x - mean) / (std + self.eps) + self.beta
+
+class AllReduce(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input):
+        input_list = [torch.zeros_like(input) for k in range(dist.get_world_size())]
+        dist.all_gather(input_list, input, async_op=False)
+        inputs = torch.stack(input_list, dim=0)
+        return torch.sum(inputs, dim=0)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        dist.all_reduce(grad_output, async_op=False)
+        return grad_output
+
+class _NewEmptyTensorOp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, new_shape):
+        ctx.shape = x.shape
+        return x.new_empty(new_shape)
+
+    @staticmethod 
+    def backward(ctx, grad):
+        shape = ctx.shape
+        return _NewEmptyTensorOp.apply(grad, shape), None
+
+class BatchNorm2dWrapper(nn.BatchNorm2d):
+    """
+    wrapper around BatchNorm2d to allow for zero-size tensors
+    """
+    def forward(self, x):
+        if x.numel() > 0:
+            return super(BatchNorm2d, self).forward(x)
+        # get output shape
+        output_shape = x.shape
+        return _NewEmptyTensorOp.apply(x, output_shape)
+
+class SyncBatchNorm(BatchNorm2dWrapper):
+    def forward(self, input):
+        world_size = 1 if not dist.is_available() or not dist.is_initialized() else dist.get_world_size()
+        if world_size == 1 or not self.training:
+            return super().forward(input)
+        
+        assert input.shape[0] > 0, "SyncBatchNorm does not support empty inputs"
+
+        C = input.shape[1]
+        mean = torch.mean(input, dim=[0, 2, 3])
+        meansqr = torch.mean(input * input, dim=[0, 2, 3])
+
+        vec = torch.cat([mean, meansqr], dim=0)
+        vec = AllReduce.apply(vec) * (1.0 / dist.get_world_size())
+
+        mean, meansqr = torch.split(vec, C)
+        var = meansqr - mean * mean
+        self.running_mean += self.momentum * (mean.detach() - self.running_mean)
+        self.running_var += self.momentum * (var.detach() - self.running_var)
+
+        invstd = torch.rsqrt(var + self.eps)
+        scale = self.weight * invstd
+        bias = self.bias - mean * scale
+        scale = scale.reshape(1, -1, 1, 1)
+        bias = bias.reshape(1, -1, 1, 1)
+        return input * scale + bias
 
 class MedPoseHistory:
     def __init__(self):

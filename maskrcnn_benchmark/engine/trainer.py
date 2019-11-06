@@ -2,12 +2,15 @@
 import datetime
 import logging
 import time
+import os
 
 import torch
 import torch.distributed as dist
 
 from maskrcnn_benchmark.utils.comm import get_world_size
 from maskrcnn_benchmark.utils.metric_logger import MetricLogger
+
+import matplotlib.pyplot as plt
 
 from apex import amp
 
@@ -45,6 +48,7 @@ def do_train(
     device,
     checkpoint_period,
     arguments,
+    plot_dir=None
 ):
     logger = logging.getLogger("maskrcnn_benchmark.trainer")
     logger.info("Start training")
@@ -54,6 +58,8 @@ def do_train(
     model.train()
     start_training_time = time.time()
     end = time.time()
+    plot_data_global_avg = {}
+    plot_data_median = {}
     for iteration, (images, targets, _) in enumerate(data_loader, start_iter):
         if any(len(target) < 1 for target in targets):
             logger.error(f"Iteration={iteration + 1} || Image Ids used for training {_} || targets Length={[len(target) for target in targets]}" )
@@ -115,8 +121,28 @@ def do_train(
                     memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
                 )
             )
+            # update plot_data
+            for name, meter in meters.meters.items():
+                if not name in plot_data_global_avg:
+                    plot_data_global_avg[name] = []
+                    plot_data_median[name] = []
+                plot_data_global_avg[name].append(meter.global_avg)
+                plot_data_median[name].append(meter.median)
+
         if iteration % checkpoint_period == 0:
             checkpointer.save("model_{:07d}".format(iteration), **arguments)
+            plot = False
+            if plot:
+                for key in plot_data_global_avg.keys():
+                    loss_iters = range(20, len(plot_data_global_avg[key]) * 20 + 20, 20)
+                    # plot global average data
+                    plt.figure()
+                    plt.plot(loss_iters, plot_data_global_avg[key])
+                    plt.savefig(os.path.join(plot_dir, "global_avg_loss_curve_{}_{}.png").format(key, iteration))
+                    # plot median data
+                    plt.figure()
+                    plt.plot(loss_iters, plot_data_median[key])
+                    plt.savefig(os.path.join(plot_dir, "median_loss_curve_{}_{}.png").format(key, iteration))
         if iteration == max_iter:
             checkpointer.save("model_final", **arguments)
 
