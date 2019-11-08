@@ -241,8 +241,16 @@ def inference(
                             if box_ious.shape[0] != 0:
                                 match_idx = box_ious.max(0)[1].item()
                                 pred_ann = {}
+                                pred_ann['bbox_head'] = gt_ann['bbox_head']
                                 pred_ann['bbox'] = boxes[match_idx]
                                 pred_ann['keypoints'] = keypoints[match_idx].tolist()
+                                gt_vis = gt_ann["keypoints"][2::3]
+                                for idx in range(len(gt_vis)):
+                                    if gt_vis[idx] == 0:
+                                        pidx = 3*idx
+                                        pred_ann['keypoints'][pidx] = 0
+                                        pred_ann['keypoints'][pidx+1] = 0
+                                        pred_ann['keypoints'][pidx+2] = 0
                                 pred_ann['track_id'] = frame_tracks[match_idx]
                                 pred_ann['image_id'] = im_id
                                 pred_ann['scores'] = keypoint_scores[match_idx].tolist()

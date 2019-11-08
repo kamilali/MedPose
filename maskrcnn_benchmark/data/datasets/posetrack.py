@@ -82,7 +82,6 @@ class PoseTrackDataset(torch.utils.data.Dataset):
                         posetrack_annotations.append(anno)
                     else:
                         continue
-
             #seq_len = len(posetrack_image_ids)
             # just 5 frames of a video are used currently to train
             if is_train:

@@ -93,7 +93,11 @@ class MedPoseEncoder(nn.Module):
         apply LocalRNN to small local window to capture local
         structures and only keep the last hidden state representation
         '''
-        enc_in = feature_maps[:, -self.lrnn_window_size:]
+        t_idx = feature_maps.shape[1]
+        if self.use_lrnn:
+            enc_in = feature_maps[:, -self.lrnn_window_size:]
+        else:
+            enc_in = feature_maps
         
         if initial_frame:
             self.enc_history[enc_in.get_device() - 1].reset()
@@ -154,7 +158,12 @@ class MedPoseEncoder(nn.Module):
             if self.use_lrnn:
                 context = curr_enc_hist.get_lrnn_history(enc_layer)
             else:
-                context = enc_in
+                enc_in = enc_in[:,-1]
+                x_encoding = torch.transpose(torch.arange(enc_in.shape[-2]).repeat(enc_in.shape[-1], 1).to(enc_in.get_device()), 1, 0)
+                y_encoding = torch.arange(enc_in.shape[-1]).repeat(enc_in.shape[-2], 1).to(enc_in.get_device())
+                t_encoding = x_encoding.new_full((x_encoding.shape), t_idx)
+                spatiotemporal_encoding = torch.stack([x_encoding, y_encoding, t_encoding], dim=2).repeat(enc_in.shape[0], 1, 1, 1).permute(0, 3, 1, 2).float()
+                context = torch.cat([enc_in, spatiotemporal_encoding], dim=1)
             '''
             attend to local structures using region features as
             queries and outputs of LocalRNNs as context

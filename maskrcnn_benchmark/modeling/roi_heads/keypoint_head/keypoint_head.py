@@ -57,7 +57,7 @@ class ROIKeypointHead(torch.nn.Module):
                         roi_map_dim=cfg.MODEL.MEDPOSE.ROI_MAP_DIM,
                         gpus=range(cfg.NUM_GPUS),
                         lrnn_batch_norm=cfg.MODEL.MEDPOSE_SYNC_BATCHNORM,
-                        use_lrnn=cfg.MODEL.MEDPOSE.MEDPOSE_DECODER_LRCM)
+                        use_lrnn=cfg.MODEL.MEDPOSE_DECODER_LRCM)
             else:
                 # to build residual connection for heatmap production (this is only thing necessary -> no medpose)
                 self.conv_fcn1 = layers.Conv2d(cfg.MODEL.MEDPOSE.MODEL_DIM, cfg.MODEL.MEDPOSE.NUM_KEYPOINTS, 1, stride=1, padding=0)
